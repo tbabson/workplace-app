@@ -10,7 +10,6 @@ A Go-based REST API for managing workplace operations: attendance, projects, mem
 - [Tech Stack](#tech-stack)
 - [Architecture](#architecture)
 - [Getting Started](#getting-started)
-- [Environment Variables](#environment-variables)
 - [Running the Project](#running-the-project)
 - [API Overview](#api-overview)
 - [Modules](#modules)
