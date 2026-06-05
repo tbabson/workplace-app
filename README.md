@@ -298,12 +298,6 @@ Attendance sign-in checks the submitted GPS coordinates against the configured c
 
 Configure the company location in `.env`:
 
-```env
-COMPANY_LAT=6.62501
-COMPANY_LNG=3.34346
-GEOFENCE_RADIUS=100
-```
-
 ### Device Lock (production only)
 
 When `ENV=production`, each browser is assigned a persistent UUID stored in `localStorage`. If a device has already been used to sign in a different employee today, the sign-in is rejected. This prevents buddy-punching.
