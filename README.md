@@ -327,14 +327,3 @@ make seed       # Apply seed migration (002)
 ```
 
 ---
-
-## Default Credentials
-
-A default super admin account is created by migration `002_seed.sql`:
-
-| Field    | Value                 |
-| -------- | --------------------- |
-| Email    | `tbabson20@gmail.com` |
-| Password | `admin1234`           |
-
-> Change these credentials immediately after first login in any non-development environment.
