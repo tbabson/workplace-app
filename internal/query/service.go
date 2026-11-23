@@ -36,6 +36,8 @@ func (s *Service) Create(ctx context.Context, dto CreateQueryDTO, issuerID strin
 
 	// Notify recipient in-app + email
 	go func() {
+		// The request context is cancelled once the handler returns.
+		ctx := context.Background()
 		u, err := s.userRepo.FindByID(ctx, dto.RecipientID)
 		if err != nil {
 			return
@@ -88,6 +90,8 @@ func (s *Service) Respond(ctx context.Context, id, responderID string, dto Respo
 
 	// Notify the issuer that their query was responded to
 	go func() {
+		// The request context is cancelled once the handler returns.
+		ctx := context.Background()
 		u, err := s.userRepo.FindByID(ctx, q.IssuerID)
 		if err != nil {
 			return

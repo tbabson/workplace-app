@@ -49,8 +49,8 @@ func (r *BudgetRepository) AddExpense(ctx context.Context, e *Expense) error {
 		Scan(&e.ID, &e.Date, &e.CreatedAt)
 }
 
-func (r *BudgetRepository) DeleteExpense(ctx context.Context, id string) error {
-	_, err := r.db.Exec(ctx, `DELETE FROM project_expenses WHERE id=$1`, id)
+func (r *BudgetRepository) DeleteExpense(ctx context.Context, projectID, id string) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM project_expenses WHERE id=$1 AND project_id=$2`, id, projectID)
 	return err
 }
 

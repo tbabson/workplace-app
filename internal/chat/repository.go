@@ -244,3 +244,15 @@ func (r *Repository) ListReactions(ctx context.Context, messageID string) ([]*Me
 	}
 	return list, nil
 }
+
+// IsMessageVisible reports whether userID is a member of the room containing messageID.
+func (r *Repository) IsMessageVisible(ctx context.Context, messageID, userID string) (bool, error) {
+	var ok bool
+	err := r.db.QueryRow(ctx,
+		`SELECT EXISTS(
+		   SELECT 1 FROM messages m
+		   JOIN chat_room_members crm ON crm.room_id = m.room_id
+		   WHERE m.id = $1 AND crm.user_id = $2)`,
+		messageID, userID).Scan(&ok)
+	return ok, err
+}

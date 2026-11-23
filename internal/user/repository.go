@@ -40,7 +40,7 @@ func (r *Repository) FindByID(ctx context.Context, id string) (*User, error) {
 
 func (r *Repository) FindByEmail(ctx context.Context, email string) (*User, error) {
 	q := `SELECT id, name, email, password_hash, role, position, department_id, department_name, is_active, created_at, updated_at
-	      FROM users WHERE email = $1`
+	      FROM users WHERE lower(email) = lower($1)`
 	u := &User{}
 	err := r.db.QueryRow(ctx, q, email).Scan(
 		&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role,

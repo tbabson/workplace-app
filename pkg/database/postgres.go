@@ -9,10 +9,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func NewPostgres(dsn string) (*pgxpool.Pool, error) {
+// NewPostgres opens a connection pool. timezone sets the session time zone so
+// that CURRENT_DATE and date casts match the app's notion of "today".
+func NewPostgres(dsn, timezone string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres config: %w", err)
+	}
+	if timezone != "" {
+		cfg.ConnConfig.RuntimeParams["timezone"] = timezone
 	}
 
 	// Register uuid.UUID so pgx scans UUID columns as properly formatted strings

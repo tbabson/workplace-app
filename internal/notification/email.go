@@ -42,7 +42,7 @@ func (m *Mailer) Send(to, name, subject, body string) error {
 
 	msg := fmt.Sprintf(
 		"From: Workplace <%s>\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
-		m.from, to, subject, buf.String(),
+		headerValue(m.from), headerValue(to), headerValue(subject), buf.String(),
 	)
 
 	addr := fmt.Sprintf("%s:%d", m.host, m.port)

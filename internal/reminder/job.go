@@ -10,6 +10,8 @@ import (
 	"workplace/internal/notification"
 	"workplace/internal/project"
 	"workplace/internal/task"
+
+	"github.com/redis/go-redis/v9"
 )
 
 type Job struct {
@@ -17,35 +19,55 @@ type Job struct {
 	taskRepo       *task.Repository
 	attendanceRepo *attendance.Repository
 	notifSvc       *notification.Service
+	rdb            *redis.Client
+	loc            *time.Location
 }
 
-func New(projectRepo *project.Repository, taskRepo *task.Repository, attendanceRepo *attendance.Repository, notifSvc *notification.Service) *Job {
+// New creates the reminder job. Times are interpreted in loc. rdb is used to make
+// sure each job runs once per day even when several app replicas are running.
+func New(projectRepo *project.Repository, taskRepo *task.Repository, attendanceRepo *attendance.Repository, notifSvc *notification.Service, rdb *redis.Client, loc *time.Location) *Job {
 	return &Job{
 		projectRepo:    projectRepo,
 		taskRepo:       taskRepo,
 		attendanceRepo: attendanceRepo,
 		notifSvc:       notifSvc,
+		rdb:            rdb,
+		loc:            loc,
 	}
 }
 
 // Run blocks forever, running three daily jobs:
 // 08:00 — deadline reminders, 16:30 — sign-out reminder, 18:00 — auto-close open records.
 func (j *Job) Run() {
-	go j.runDaily(8, 0, j.fireDeadlineReminders)
-	go j.runDaily(16, 30, j.fireSignOutReminder)
-	j.runDaily(18, 0, j.fireAutoClose)
+	go j.runDaily("deadlines", 8, 0, j.fireDeadlineReminders)
+	go j.runDaily("signout", 16, 30, j.fireSignOutReminder)
+	j.runDaily("autoclose", 18, 0, j.fireAutoClose)
 }
 
-func (j *Job) runDaily(hour, minute int, fn func()) {
+func (j *Job) runDaily(name string, hour, minute int, fn func()) {
 	for {
-		now := time.Now()
-		next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
+		now := time.Now().In(j.loc)
+		next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, j.loc)
 		if !now.Before(next) {
-			next = next.Add(24 * time.Hour)
+			// AddDate (not +24h) keeps the wall-clock time across DST changes.
+			next = next.AddDate(0, 0, 1)
 		}
 		time.Sleep(time.Until(next))
-		fn()
+		if j.claim(name, next) {
+			fn()
+		}
 	}
+}
+
+// claim takes a per-job, per-day lock in Redis so only one replica runs the job.
+func (j *Job) claim(name string, day time.Time) bool {
+	key := "reminder:" + name + ":" + day.Format("2006-01-02")
+	ok, err := j.rdb.SetNX(context.Background(), key, "1", 23*time.Hour).Result()
+	if err != nil {
+		log.Printf("reminder: lock %s: %v (running anyway)", key, err)
+		return true
+	}
+	return ok
 }
 
 func (j *Job) fireDeadlineReminders() {
@@ -100,7 +122,7 @@ func (j *Job) fireDeadlineReminders() {
 func (j *Job) fireAutoClose() {
 	ctx := context.Background()
 
-	closedAt := time.Now()
+	closedAt := time.Now().In(j.loc)
 	userIDs, err := j.attendanceRepo.AutoCloseOpenRecords(ctx, closedAt)
 	if err != nil {
 		log.Printf("reminder: auto-close open records: %v", err)

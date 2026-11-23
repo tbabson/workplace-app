@@ -6,7 +6,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /workplace ./cmd/server/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o /workplace ./cmd/server
 
 FROM alpine:3.20
 
@@ -17,6 +17,6 @@ WORKDIR /root/
 COPY --from=builder /workplace .
 COPY --from=builder /app/.env* .
 
-EXPOSE 8080
+EXPOSE 5002
 
 CMD ["./workplace"]

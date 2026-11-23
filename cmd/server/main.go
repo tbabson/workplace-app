@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"workplace/internal/asset"
 	"workplace/internal/attendance"
@@ -28,15 +33,12 @@ import (
 	"workplace/pkg/config"
 	"workplace/pkg/database"
 	"workplace/pkg/middleware"
-
-	"github.com/go-chi/chi/v5"
-	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 )
 
 func main() {
 	cfg := config.Load()
 
-	db, err := database.NewPostgres(cfg.DatabaseURL)
+	db, err := database.NewPostgres(cfg.DatabaseURL, cfg.Location.String())
 	if err != nil {
 		log.Fatalf("postgres: %v", err)
 	}
@@ -51,119 +53,111 @@ func main() {
 	appCache := cache.New(rdb)
 
 	// ── Repositories ──────────────────────────────────────────────────────────
-	userRepo           := user.NewRepository(db)
-	deptRepo           := department.NewRepository(db)
-	projectRepo        := project.NewRepository(db)
+	userRepo := user.NewRepository(db)
+	deptRepo := department.NewRepository(db)
+	projectRepo := project.NewRepository(db)
 	projectHistoryRepo := project.NewHistoryRepository(db)
-	projectBudgetRepo  := project.NewBudgetRepository(db)
-	projectFileRepo    := project.NewFileRepository(db)
-	taskRepo           := task.NewRepository(db)
-	milestoneRepo      := milestone.NewRepository(db)
-	commentRepo        := projectcomment.NewRepository(db)
-	attendanceRepo     := attendance.NewRepository(db)
-	overtimeRepo       := overtime.NewRepository(db)
-	chatRepo           := chat.NewRepository(db)
-	memoRepo           := memo.NewRepository(db)
-	queryRepo          := query.NewRepository(db)
-	notifRepo          := notification.NewRepository(db)
-	leaveRepo          := leave.NewRepository(db)
-	reviewRepo         := review.NewRepository(db)
-	claimRepo          := claim.NewRepository(db)
-	assetRepo          := asset.NewRepository(db)
-	reportRepo         := report.NewRepository(db)
+	projectBudgetRepo := project.NewBudgetRepository(db)
+	projectFileRepo := project.NewFileRepository(db)
+	taskRepo := task.NewRepository(db)
+	milestoneRepo := milestone.NewRepository(db)
+	commentRepo := projectcomment.NewRepository(db)
+	attendanceRepo := attendance.NewRepository(db)
+	overtimeRepo := overtime.NewRepository(db)
+	chatRepo := chat.NewRepository(db)
+	memoRepo := memo.NewRepository(db)
+	queryRepo := query.NewRepository(db)
+	notifRepo := notification.NewRepository(db)
+	leaveRepo := leave.NewRepository(db)
+	reviewRepo := review.NewRepository(db)
+	claimRepo := claim.NewRepository(db)
+	assetRepo := asset.NewRepository(db)
+	reportRepo := report.NewRepository(db)
 
 	// ── Notification infrastructure ───────────────────────────────────────────
-	mailer   := notification.NewMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom)
+	mailer := notification.NewMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom)
 	notifHub := notification.NewHub()
 	notifSvc := notification.NewService(notifRepo, notifHub, mailer)
 
 	// ── Services ──────────────────────────────────────────────────────────────
-	userSvc       := user.NewService(userRepo, appCache)
-	authSvc       := auth.NewService(userSvc, cfg.JWTSecret, cfg.JWTExpirationHrs, rdb)
-	deptSvc       := department.NewService(deptRepo, appCache)
-	chatSvc       := chat.NewService(chatRepo, userRepo)
-	chatHub       := chat.NewHub(chatRepo, userRepo, notifSvc)
-	projectSvc    := project.NewService(projectRepo, projectHistoryRepo, projectBudgetRepo, projectFileRepo, chatSvc, notifSvc, userRepo)
-	taskSvc       := task.NewService(taskRepo, notifSvc, chatSvc)
-	milestoneSvc  := milestone.NewService(milestoneRepo)
-	commentSvc    := projectcomment.NewService(commentRepo, notifSvc, projectRepo)
+	userSvc := user.NewService(userRepo, appCache)
+	authSvc := auth.NewService(userSvc, cfg.JWTSecret, cfg.JWTExpirationHrs, rdb)
+	deptSvc := department.NewService(deptRepo, appCache)
+	chatSvc := chat.NewService(chatRepo, userRepo)
+	chatHub := chat.NewHub(chatRepo, userRepo, notifSvc)
+	projectSvc := project.NewService(projectRepo, projectHistoryRepo, projectBudgetRepo, projectFileRepo, chatSvc, notifSvc, userRepo)
+	taskSvc := task.NewService(taskRepo, notifSvc, chatSvc)
+	milestoneSvc := milestone.NewService(milestoneRepo)
+	commentSvc := projectcomment.NewService(commentRepo, notifSvc, projectRepo)
 	attendanceSvc := attendance.NewService(attendanceRepo, notifSvc, userRepo, cfg.CompanyLat, cfg.CompanyLng, cfg.GeofenceRadius, cfg.DeviceLockEnabled)
-	overtimeSvc   := overtime.NewService(overtimeRepo, notifSvc, userRepo)
-	memoSvc       := memo.NewService(memoRepo, notifSvc, userRepo)
-	querySvc      := query.NewService(queryRepo, notifSvc, userRepo)
-	leaveSvc      := leave.NewService(leaveRepo, notifSvc)
-	reviewSvc     := review.NewService(reviewRepo)
-	claimSvc      := claim.NewService(claimRepo, notifSvc)
-	assetSvc      := asset.NewService(assetRepo, notifSvc)
-	reportSvc     := report.NewService(reportRepo, appCache)
+	overtimeSvc := overtime.NewService(overtimeRepo, notifSvc, userRepo)
+	memoSvc := memo.NewService(memoRepo, notifSvc, userRepo)
+	querySvc := query.NewService(queryRepo, notifSvc, userRepo)
+	leaveSvc := leave.NewService(leaveRepo, notifSvc)
+	reviewSvc := review.NewService(reviewRepo)
+	claimSvc := claim.NewService(claimRepo, notifSvc)
+	assetSvc := asset.NewService(assetRepo, notifSvc)
+	reportSvc := report.NewService(reportRepo, appCache)
+
+	if err := userSvc.EnsureSuperAdmin(context.Background(), cfg.BootstrapAdminEmail, cfg.BootstrapAdminPassword); err != nil {
+		log.Fatalf("bootstrap admin: %v", err)
+	}
 
 	// ── Handlers ──────────────────────────────────────────────────────────────
-	authHandler       := auth.NewHandler(authSvc)
-	userHandler       := user.NewHandler(userSvc)
-	deptHandler       := department.NewHandler(deptSvc)
-	projectHandler    := project.NewHandler(projectSvc)
-	taskHandler       := task.NewHandler(taskSvc)
-	milestoneHandler  := milestone.NewHandler(milestoneSvc)
-	commentHandler    := projectcomment.NewHandler(commentSvc)
-	attendanceHandler := attendance.NewHandler(attendanceSvc)
-	overtimeHandler   := overtime.NewHandler(overtimeSvc)
-	chatHandler       := chat.NewHandler(chatSvc, chatHub)
-	memoHandler       := memo.NewHandler(memoSvc)
-	queryHandler      := query.NewHandler(querySvc)
-	notifHandler      := notification.NewHandler(notifSvc, notifHub)
-	leaveHandler      := leave.NewHandler(leaveSvc)
-	reviewHandler     := review.NewHandler(reviewSvc)
-	claimHandler      := claim.NewHandler(claimSvc)
-	assetHandler      := asset.NewHandler(assetSvc)
-	reportHandler     := report.NewHandler(reportSvc)
+	checkOrigin := middleware.OriginChecker(cfg.AllowedOrigins)
+	h := handlers{
+		auth:       auth.NewHandler(authSvc, !cfg.IsDevelopment()),
+		user:       user.NewHandler(userSvc),
+		dept:       department.NewHandler(deptSvc),
+		project:    project.NewHandler(projectSvc),
+		task:       task.NewHandler(taskSvc),
+		milestone:  milestone.NewHandler(milestoneSvc),
+		comment:    projectcomment.NewHandler(commentSvc),
+		attendance: attendance.NewHandler(attendanceSvc),
+		overtime:   overtime.NewHandler(overtimeSvc),
+		chat:       chat.NewHandler(chatSvc, chatHub, checkOrigin),
+		memo:       memo.NewHandler(memoSvc),
+		query:      query.NewHandler(querySvc),
+		notif:      notification.NewHandler(notifSvc, notifHub, checkOrigin),
+		leave:      leave.NewHandler(leaveSvc),
+		review:     review.NewHandler(reviewSvc),
+		claim:      claim.NewHandler(claimSvc),
+		asset:      asset.NewHandler(assetSvc),
+		report:     report.NewHandler(reportSvc),
+	}
 
 	// ── Start hubs ────────────────────────────────────────────────────────────
 	go chatHub.Run()
 	go notifHub.Run()
-	go reminder.New(projectRepo, taskRepo, attendanceRepo, notifSvc).Run()
+	go reminder.New(projectRepo, taskRepo, attendanceRepo, notifSvc, rdb, cfg.Location).Run()
 
-	// ── Router ────────────────────────────────────────────────────────────────
-	r := chi.NewRouter()
-	r.Use(chiMiddleware.Recoverer)
-	r.Use(middleware.Logger)
-	r.Use(middleware.CORS)
+	// ── Server ────────────────────────────────────────────────────────────────
+	authMw := middleware.Auth(cfg.JWTSecret, rdb, userSvc.Identity)
+	srv := &http.Server{
+		Addr:              fmt.Sprintf(":%s", cfg.Port),
+		Handler:           newRouter(h, authMw, cfg.AllowedOrigins),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		// WriteTimeout is deliberately unset: it would cut long-lived WebSocket
+		// connections. Handlers are bounded by ReadTimeout and DB timeouts.
+		IdleTimeout: 120 * time.Second,
+	}
 
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
-	})
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	authMw := middleware.Auth(cfg.JWTSecret, rdb)
+	go func() {
+		log.Printf("Server starting on %s", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server: %v", err)
+		}
+	}()
 
-	r.Route("/api/v1", func(r chi.Router) {
-		r.Route("/auth", func(r chi.Router) {
-			authHandler.RegisterRoutes(r)
-		})
-
-		r.Group(func(r chi.Router) {
-			r.Use(authMw)
-
-			r.Route("/users",         userHandler.RegisterRoutes)
-			r.Route("/departments",   deptHandler.RegisterRoutes)
-			r.Route("/projects",      projectHandler.RegisterRoutes)
-			taskHandler.RegisterRoutes(r)
-			milestoneHandler.RegisterRoutes(r)
-			commentHandler.RegisterRoutes(r)
-			r.Route("/attendance",    attendanceHandler.RegisterRoutes)
-			r.Route("/overtime",      overtimeHandler.RegisterRoutes)
-			r.Route("/chat",          chatHandler.RegisterRoutes)
-			r.Route("/memos",         memoHandler.RegisterRoutes)
-			r.Route("/queries",       queryHandler.RegisterRoutes)
-			r.Route("/notifications", notifHandler.RegisterRoutes)
-			r.Route("/leaves",        leaveHandler.RegisterRoutes)
-			r.Route("/reviews",       reviewHandler.RegisterRoutes)
-			r.Route("/claims",        claimHandler.RegisterRoutes)
-			r.Route("/assets",        assetHandler.RegisterRoutes)
-			r.Route("/reports",       reportHandler.RegisterRoutes)
-		})
-	})
-
-	addr := fmt.Sprintf(":%s", cfg.Port)
-	log.Printf("Server starting on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, r))
+	<-ctx.Done()
+	log.Println("Shutting down…")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
 }

@@ -53,7 +53,7 @@ func (r *FileRepository) List(ctx context.Context, projectID string) ([]*File, e
 	return list, nil
 }
 
-func (r *FileRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.db.Exec(ctx, `DELETE FROM project_files WHERE id=$1`, id)
+func (r *FileRepository) Delete(ctx context.Context, projectID, id string) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM project_files WHERE id=$1 AND project_id=$2`, id, projectID)
 	return err
 }

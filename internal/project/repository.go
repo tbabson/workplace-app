@@ -50,14 +50,19 @@ func (r *Repository) FindByID(ctx context.Context, id string) (*Project, error) 
 	))
 }
 
-func (r *Repository) List(ctx context.Context, deptID string) ([]*Project, error) {
+// List returns every project when scopeUserID is empty. Otherwise it returns the
+// projects in deptID plus any project scopeUserID is assigned to.
+func (r *Repository) List(ctx context.Context, deptID, scopeUserID string) ([]*Project, error) {
 	var (
 		rows pgx.Rows
 		err  error
 	)
-	if deptID != "" {
+	if scopeUserID != "" {
 		rows, err = r.db.Query(ctx,
-			`SELECT `+selectCols+` FROM projects WHERE department_id = $1 ORDER BY created_at DESC`, deptID)
+			`SELECT `+selectCols+` FROM projects
+			 WHERE ($1 <> '' AND department_id::text = $1)
+			    OR id IN (SELECT project_id FROM project_assignments WHERE user_id = $2)
+			 ORDER BY created_at DESC`, deptID, scopeUserID)
 	} else {
 		rows, err = r.db.Query(ctx,
 			`SELECT `+selectCols+` FROM projects ORDER BY created_at DESC`)
@@ -181,4 +186,13 @@ func (r *Repository) GetAssignees(ctx context.Context, projectID string) ([]stri
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+// IsAssigned reports whether userID is assigned to projectID.
+func (r *Repository) IsAssigned(ctx context.Context, projectID, userID string) (bool, error) {
+	var ok bool
+	err := r.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM project_assignments WHERE project_id=$1 AND user_id=$2)`,
+		projectID, userID).Scan(&ok)
+	return ok, err
 }

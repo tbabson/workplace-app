@@ -1,4 +1,4 @@
-.PHONY: up down build run seed migrate3 migrate4 migrate5 migrate6 tidy lint
+.PHONY: up down build run test migrate3 migrate4 migrate5 migrate6 tidy lint
 
 up:
 	docker compose up -d
@@ -10,10 +10,7 @@ build:
 	docker compose build
 
 run:
-	go run ./cmd/server/main.go
-
-seed:
-	docker exec -i workplace_postgres psql -U postgres -d workplace < migrations/002_seed.sql
+	go run ./cmd/server
 
 migrate3:
 	docker exec -i workplace_postgres psql -U postgres -d workplace < migrations/003_add_user_role.sql

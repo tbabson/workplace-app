@@ -6,6 +6,16 @@ import (
 	"fmt"
 
 	"workplace/internal/notification"
+	"workplace/pkg/utils"
+
+	"github.com/jackc/pgx/v5"
+)
+
+var (
+	ErrNotFound   = errors.New("claim not found")
+	ErrForbidden  = errors.New("you are not allowed to act on this claim")
+	ErrOwnClaim   = errors.New("you cannot review your own claim")
+	ErrWrongState = errors.New("claim is not in a state that allows this action")
 )
 
 type Service struct {
@@ -24,6 +34,11 @@ func (s *Service) Create(ctx context.Context, dto CreateClaimDTO, userID string)
 	if dto.Amount <= 0 {
 		return nil, errors.New("amount must be greater than zero")
 	}
+	if dto.ReceiptURL != nil && *dto.ReceiptURL != "" {
+		if err := utils.ValidateHTTPURL(*dto.ReceiptURL); err != nil {
+			return nil, fmt.Errorf("receipt_url: %w", err)
+		}
+	}
 	c := &Claim{
 		UserID:      userID,
 		Title:       dto.Title,
@@ -35,86 +50,92 @@ func (s *Service) Create(ctx context.Context, dto CreateClaimDTO, userID string)
 	return c, s.repo.Create(ctx, c)
 }
 
-func (s *Service) List(ctx context.Context, role, userID string) ([]*Claim, error) {
-	if role == "staff" || role == "procurement" {
-		return s.repo.List(ctx, userID)
+// List returns all claims when seeAll is true, otherwise only the caller's own.
+func (s *Service) List(ctx context.Context, seeAll bool, userID string) ([]*Claim, error) {
+	if seeAll {
+		return s.repo.List(ctx, "")
 	}
-	return s.repo.List(ctx, "")
+	return s.repo.List(ctx, userID)
 }
 
-func (s *Service) GetByID(ctx context.Context, id string) (*Claim, error) {
-	return s.repo.FindByID(ctx, id)
+// Get returns a claim if the caller owns it or may see all claims.
+func (s *Service) Get(ctx context.Context, id, callerID string, seeAll bool) (*Claim, error) {
+	c, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	if !seeAll && c.UserID != callerID {
+		return nil, ErrNotFound
+	}
+	return c, nil
+}
+
+func (s *Service) transition(ctx context.Context, id, reviewerID string, from, to Status) (*Claim, *Claim, error) {
+	c, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		return nil, nil, ErrNotFound
+	}
+	if c.UserID == reviewerID {
+		return nil, nil, ErrOwnClaim
+	}
+	var updated *Claim
+	if to == StatusPaid {
+		updated, err = s.repo.MarkPaid(ctx, id, reviewerID)
+	} else {
+		updated, err = s.repo.UpdateStatus(ctx, id, from, to, reviewerID)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, ErrWrongState
+	}
+	return c, updated, err
 }
 
 func (s *Service) Approve(ctx context.Context, id, reviewerID string) (*Claim, error) {
-	c, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return nil, errors.New("claim not found")
-	}
-	if c.Status != StatusPending {
-		return nil, errors.New("only pending claims can be approved")
-	}
-	updated, err := s.repo.UpdateStatus(ctx, id, StatusApproved, reviewerID)
+	c, updated, err := s.transition(ctx, id, reviewerID, StatusPending, StatusApproved)
 	if err != nil {
 		return nil, err
 	}
-
-	go s.notifSvc.Notify(context.Background(), notification.NotifyInput{
-		UserID: c.UserID,
-		Type:   notification.TypeClaimApproved,
-		Title:  "Expense Claim Approved",
-		Body:   fmt.Sprintf("Your claim \"%s\" (%.2f) has been approved.", c.Title, c.Amount),
-		RefID:  &c.ID,
-	})
+	s.notify(c, notification.TypeClaimApproved, "Expense Claim Approved", "approved")
 	return updated, nil
 }
 
 func (s *Service) Reject(ctx context.Context, id, reviewerID string) (*Claim, error) {
-	c, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return nil, errors.New("claim not found")
-	}
-	if c.Status != StatusPending {
-		return nil, errors.New("only pending claims can be rejected")
-	}
-	updated, err := s.repo.UpdateStatus(ctx, id, StatusRejected, reviewerID)
+	c, updated, err := s.transition(ctx, id, reviewerID, StatusPending, StatusRejected)
 	if err != nil {
 		return nil, err
 	}
-
-	go s.notifSvc.Notify(context.Background(), notification.NotifyInput{
-		UserID: c.UserID,
-		Type:   notification.TypeClaimRejected,
-		Title:  "Expense Claim Rejected",
-		Body:   fmt.Sprintf("Your claim \"%s\" (%.2f) has been rejected.", c.Title, c.Amount),
-		RefID:  &c.ID,
-	})
+	s.notify(c, notification.TypeClaimRejected, "Expense Claim Rejected", "rejected")
 	return updated, nil
 }
 
 func (s *Service) MarkPaid(ctx context.Context, id, reviewerID string) (*Claim, error) {
-	c, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return nil, errors.New("claim not found")
-	}
-	if c.Status != StatusApproved {
-		return nil, errors.New("only approved claims can be marked as paid")
-	}
-	updated, err := s.repo.MarkPaid(ctx, id, reviewerID)
+	c, updated, err := s.transition(ctx, id, reviewerID, StatusApproved, StatusPaid)
 	if err != nil {
 		return nil, err
 	}
-
-	go s.notifSvc.Notify(context.Background(), notification.NotifyInput{
-		UserID: c.UserID,
-		Type:   notification.TypeClaimPaid,
-		Title:  "Expense Claim Paid",
-		Body:   fmt.Sprintf("Your claim \"%s\" (%.2f) has been paid.", c.Title, c.Amount),
-		RefID:  &c.ID,
-	})
+	s.notify(c, notification.TypeClaimPaid, "Expense Claim Paid", "paid")
 	return updated, nil
 }
 
-func (s *Service) Delete(ctx context.Context, id string) error {
+func (s *Service) notify(c *Claim, typ notification.Type, title, verb string) {
+	go s.notifSvc.Notify(context.Background(), notification.NotifyInput{
+		UserID: c.UserID,
+		Type:   typ,
+		Title:  title,
+		Body:   fmt.Sprintf("Your claim \"%s\" (%.2f) has been %s.", c.Title, c.Amount, verb),
+		RefID:  &c.ID,
+	})
+}
+
+// Delete lets a super_admin delete any claim, and an owner delete their own
+// claim while it is still pending.
+func (s *Service) Delete(ctx context.Context, id, callerID string, isAdmin bool) error {
+	c, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		return ErrNotFound
+	}
+	if !isAdmin && (c.UserID != callerID || c.Status != StatusPending) {
+		return ErrForbidden
+	}
 	return s.repo.Delete(ctx, id)
 }

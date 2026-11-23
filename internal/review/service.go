@@ -20,11 +20,9 @@ func (s *Service) Create(ctx context.Context, dto CreateReviewDTO, reviewerID st
 	return rv, s.repo.Create(ctx, rv)
 }
 
-func (s *Service) List(ctx context.Context, role, userID string) ([]*Review, error) {
-	if role == "staff" {
-		return s.repo.List(ctx, userID)
-	}
-	return s.repo.List(ctx, "")
+// List returns reviews about userID, or all reviews when userID is empty.
+func (s *Service) List(ctx context.Context, userID string) ([]*Review, error) {
+	return s.repo.List(ctx, userID)
 }
 
 func (s *Service) GetByID(ctx context.Context, id string) (*Review, error) {

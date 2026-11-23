@@ -7,8 +7,6 @@ import (
 
 	"workplace/pkg/middleware"
 	"workplace/pkg/response"
-
-	"github.com/go-chi/chi/v5"
 )
 
 type Handler struct {
@@ -19,13 +17,15 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-func (h *Handler) RegisterRoutes(r chi.Router) {
-	r.Post("/sign-in", h.signIn)
-	r.Post("/sign-out", h.signOut)
-	r.Put("/{id}/sign-out", h.adminSignOut)
-	r.Get("/me", h.myHistory)
-	r.Get("/user/{userID}", h.userHistory)
-	r.Get("/", h.allHistory)
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, prefix string) {
+	manager := middleware.With(middleware.RequireRole(middleware.RoleSuperAdmin, middleware.RoleDeptHead))
+
+	mux.HandleFunc("POST "+prefix+"/sign-in", h.signIn)
+	mux.HandleFunc("POST "+prefix+"/sign-out", h.signOut)
+	mux.Handle("PUT "+prefix+"/{id}/sign-out", manager(h.adminSignOut))
+	mux.HandleFunc("GET "+prefix+"/me", h.myHistory)
+	mux.Handle("GET "+prefix+"/user/{userID}", manager(h.userHistory))
+	mux.Handle("GET "+prefix, manager(h.allHistory))
 }
 
 func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
@@ -53,19 +53,13 @@ func (h *Handler) signOut(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) adminSignOut(w http.ResponseWriter, r *http.Request) {
-	role := middleware.GetRole(r)
-	if role != "super_admin" && role != "dept_head" {
-		response.Error(w, http.StatusForbidden, "forbidden")
-		return
-	}
-
 	var body struct {
 		SignOutAt *time.Time `json:"sign_out_at"`
 	}
 	// ignore decode error — body is optional
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
-	a, err := h.svc.AdminSignOut(r.Context(), chi.URLParam(r, "id"), body.SignOutAt)
+	a, err := h.svc.AdminSignOut(r.Context(), r.PathValue("id"), body.SignOutAt)
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -76,16 +70,16 @@ func (h *Handler) adminSignOut(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) myHistory(w http.ResponseWriter, r *http.Request) {
 	list, err := h.svc.MyHistory(r.Context(), middleware.GetUserID(r))
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, list, len(list))
 }
 
 func (h *Handler) userHistory(w http.ResponseWriter, r *http.Request) {
-	list, err := h.svc.UserHistory(r.Context(), chi.URLParam(r, "userID"))
+	list, err := h.svc.UserHistory(r.Context(), r.PathValue("userID"))
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, list, len(list))
@@ -94,7 +88,7 @@ func (h *Handler) userHistory(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) allHistory(w http.ResponseWriter, r *http.Request) {
 	list, err := h.svc.AllHistory(r.Context())
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, list, len(list))

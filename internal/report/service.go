@@ -30,7 +30,13 @@ func defaultDateRange(from, to string) (string, string) {
 }
 
 func (s *Service) Dashboard(ctx context.Context, userID, role, deptID string) (*DashboardData, error) {
-	cacheKey := fmt.Sprintf("report:dashboard:%s:%s", role, deptID)
+	// Admin and dept-head dashboards are shared per role/department, but every
+	// other role gets a personal dashboard, so it must be cached per user.
+	scope := deptID
+	if role != "super_admin" && role != "dept_head" {
+		scope = "user:" + userID
+	}
+	cacheKey := fmt.Sprintf("report:dashboard:%s:%s", role, scope)
 	if d, ok := cache.Get[DashboardData](ctx, s.cache, cacheKey); ok {
 		return d, nil
 	}

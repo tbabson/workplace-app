@@ -7,6 +7,15 @@ import (
 	"time"
 
 	"workplace/internal/notification"
+
+	"github.com/jackc/pgx/v5"
+)
+
+var (
+	ErrNotFound   = errors.New("leave request not found")
+	ErrOwnRequest = errors.New("you cannot review your own leave request")
+	ErrForbidden  = errors.New("cannot cancel another user's request")
+	ErrNotPending = errors.New("only pending requests can be changed")
 )
 
 type Service struct {
@@ -18,9 +27,31 @@ func NewService(repo *Repository, notifSvc *notification.Service) *Service {
 	return &Service{repo: repo, notifSvc: notifSvc}
 }
 
+func validType(t Type) bool {
+	switch t {
+	case TypeAnnual, TypeSick, TypeMaternity, TypePaternity, TypeUnpaid, TypeOther:
+		return true
+	}
+	return false
+}
+
+// workingDays counts Monday–Friday days in [start, end].
+func workingDays(start, end time.Time) int {
+	n := 0
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		if wd := d.Weekday(); wd != time.Saturday && wd != time.Sunday {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Service) Create(ctx context.Context, dto CreateRequestDTO, userID string) (*Request, error) {
 	if dto.Type == "" || dto.StartDate == "" || dto.EndDate == "" {
 		return nil, errors.New("type, start_date, and end_date are required")
+	}
+	if !validType(dto.Type) {
+		return nil, errors.New("invalid leave type")
 	}
 	start, err := time.Parse("2006-01-02", dto.StartDate)
 	if err != nil {
@@ -33,36 +64,50 @@ func (s *Service) Create(ctx context.Context, dto CreateRequestDTO, userID strin
 	if end.Before(start) {
 		return nil, errors.New("end_date must be after start_date")
 	}
-	days := int(end.Sub(start).Hours()/24) + 1
+	days := workingDays(start, end)
+	if days == 0 {
+		return nil, errors.New("leave period contains no working days")
+	}
 	req := &Request{UserID: userID, Type: dto.Type, StartDate: dto.StartDate, EndDate: dto.EndDate, Days: days, Reason: dto.Reason}
 	return req, s.repo.Create(ctx, req)
 }
 
-func (s *Service) List(ctx context.Context, role, userID string) ([]*Request, error) {
-	if role == "staff" || role == "procurement" {
-		return s.repo.List(ctx, userID)
+// List returns all requests when seeAll is true, otherwise only the caller's own.
+func (s *Service) List(ctx context.Context, seeAll bool, userID string) ([]*Request, error) {
+	if seeAll {
+		return s.repo.List(ctx, "")
 	}
-	return s.repo.List(ctx, "")
+	return s.repo.List(ctx, userID)
 }
 
-func (s *Service) GetByID(ctx context.Context, id string) (*Request, error) {
-	return s.repo.FindByID(ctx, id)
+func (s *Service) Get(ctx context.Context, id, callerID string, seeAll bool) (*Request, error) {
+	req, err := s.repo.FindByID(ctx, id)
+	if err != nil || (!seeAll && req.UserID != callerID) {
+		return nil, ErrNotFound
+	}
+	return req, nil
 }
 
 func (s *Service) Approve(ctx context.Context, id, reviewerID string, dto ReviewDTO) error {
 	req, err := s.repo.FindByID(ctx, id)
 	if err != nil {
-		return errors.New("leave request not found")
+		return ErrNotFound
 	}
-	if req.Status != StatusPending {
-		return errors.New("only pending requests can be approved")
+	if req.UserID == reviewerID {
+		return ErrOwnRequest
 	}
-	note := &dto.Note
-	if err := s.repo.Review(ctx, id, reviewerID, StatusApproved, note); err != nil {
+	// Deduct from the balance of the year the leave starts in, not the current year.
+	start, err := time.Parse("2006-01-02", req.StartDate)
+	if err != nil {
 		return err
 	}
-	year := time.Now().Year()
-	_ = s.repo.DeductBalance(ctx, req.UserID, req.Type, year, req.Days)
+	note := &dto.Note
+	if err := s.repo.Approve(ctx, req, reviewerID, note, start.Year()); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotPending
+		}
+		return err
+	}
 
 	go s.notifSvc.Notify(context.Background(), notification.NotifyInput{
 		UserID: req.UserID,
@@ -77,13 +122,16 @@ func (s *Service) Approve(ctx context.Context, id, reviewerID string, dto Review
 func (s *Service) Reject(ctx context.Context, id, reviewerID string, dto ReviewDTO) error {
 	req, err := s.repo.FindByID(ctx, id)
 	if err != nil {
-		return errors.New("leave request not found")
+		return ErrNotFound
 	}
-	if req.Status != StatusPending {
-		return errors.New("only pending requests can be rejected")
+	if req.UserID == reviewerID {
+		return ErrOwnRequest
 	}
 	note := &dto.Note
 	if err := s.repo.Review(ctx, id, reviewerID, StatusRejected, note); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotPending
+		}
 		return err
 	}
 
@@ -100,15 +148,18 @@ func (s *Service) Reject(ctx context.Context, id, reviewerID string, dto ReviewD
 func (s *Service) Cancel(ctx context.Context, id, userID string) error {
 	req, err := s.repo.FindByID(ctx, id)
 	if err != nil {
-		return errors.New("leave request not found")
+		return ErrNotFound
 	}
 	if req.UserID != userID {
-		return errors.New("cannot cancel another user's request")
+		return ErrForbidden
 	}
-	if req.Status != StatusPending {
-		return errors.New("only pending requests can be cancelled")
+	if err := s.repo.Cancel(ctx, id, userID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotPending
+		}
+		return err
 	}
-	return s.repo.Cancel(ctx, id)
+	return nil
 }
 
 func (s *Service) GetBalance(ctx context.Context, userID string, year int) ([]*Balance, error) {
@@ -119,6 +170,12 @@ func (s *Service) GetBalance(ctx context.Context, userID string, year int) ([]*B
 }
 
 func (s *Service) SetBalance(ctx context.Context, dto SetBalanceDTO, userID string) error {
+	if !validType(dto.Type) {
+		return errors.New("invalid leave type")
+	}
+	if dto.Total < 0 {
+		return errors.New("total must not be negative")
+	}
 	if dto.Year == 0 {
 		dto.Year = time.Now().Year()
 	}

@@ -1,11 +1,8 @@
--- Seed: initial super_admin account
--- email: tbabson20@gmail.com  |  password: admin1234
-INSERT INTO users (name, email, password_hash, role, is_active)
-VALUES (
-    'Admin',
-    'tbabson20@gmail.com',
-    '$2a$10$g7rIgQRvRt110gL5dsvJ5eFmJcFYpyaOmkc6am88msYw5WkzGwCbm',
-    'super_admin',
-    true
-)
-ON CONFLICT (email) DO NOTHING;
+-- Intentionally empty.
+--
+-- This file used to insert a super_admin with a hard-coded password. The first
+-- super_admin is now created by the app on startup from the
+-- BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD environment variables
+-- (only when no super_admin exists yet). The file is kept so migration
+-- numbering stays the same.
+SELECT 1;

@@ -2,25 +2,27 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
-	"strings"
 
+	"workplace/pkg/middleware"
 	"workplace/pkg/response"
-
-	"github.com/go-chi/chi/v5"
 )
 
 type Handler struct {
-	svc *Service
+	svc          *Service
+	secureCookie bool
 }
 
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+// NewHandler creates the auth handler. secureCookie should be true whenever the
+// app is served over HTTPS (i.e. outside local development).
+func NewHandler(svc *Service, secureCookie bool) *Handler {
+	return &Handler{svc: svc, secureCookie: secureCookie}
 }
 
-func (h *Handler) RegisterRoutes(r chi.Router) {
-	r.Post("/login", h.login)
-	r.Post("/logout", h.logout)
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, prefix string) {
+	mux.HandleFunc("POST "+prefix+"/login", h.login)
+	mux.HandleFunc("POST "+prefix+"/logout", h.logout)
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
@@ -32,47 +34,41 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 
 	token, err := h.svc.Login(r.Context(), dto)
 	if err != nil {
-		response.Error(w, http.StatusUnauthorized, err.Error())
+		status := http.StatusUnauthorized
+		if errors.Is(err, ErrTooManyAttempts) {
+			status = http.StatusTooManyRequests
+		}
+		response.Error(w, status, err.Error())
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "auth_token",
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   86400 * 7, // 7 days
-	})
-
+	h.setCookie(w, token, int(h.svc.TokenTTL().Seconds()))
 	response.JSON(w, http.StatusOK, map[string]string{"message": "Login successful", "token": token})
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	// Read token from cookie
-	cookie, err := r.Cookie("auth_token")
-	if err != nil || cookie.Value == "" {
-		// Also check Authorization header as fallback
-		header := r.Header.Get("Authorization")
-		token := strings.TrimPrefix(header, "Bearer ")
-		if token == "" {
-			response.Error(w, http.StatusBadRequest, "missing token")
-			return
-		}
-		_ = h.svc.Logout(r.Context(), token)
-	} else {
-		_ = h.svc.Logout(r.Context(), cookie.Value)
+	token := middleware.TokenFromRequest(r)
+	if token == "" {
+		response.Error(w, http.StatusBadRequest, "missing token")
+		return
+	}
+	if err := h.svc.Logout(r.Context(), token); err != nil {
+		response.ServerError(w, r, err)
+		return
 	}
 
-	// Clear the cookie
+	h.setCookie(w, "", -1)
+	response.Message(w, http.StatusOK, "Logged out successfully")
+}
+
+func (h *Handler) setCookie(w http.ResponseWriter, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
-		Value:    "",
+		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   h.secureCookie,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
+		MaxAge:   maxAge,
 	})
-
-	response.Message(w, http.StatusOK, "Logged out successfully")
 }

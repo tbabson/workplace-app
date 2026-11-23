@@ -59,26 +59,21 @@ func (r *Repository) List(ctx context.Context, userID string) ([]*Claim, error) 
 	return list, nil
 }
 
-func (r *Repository) UpdateStatus(ctx context.Context, id string, status Status, reviewerID string) (*Claim, error) {
-	now := time.Now()
-	_, err := r.db.Exec(ctx,
-		`UPDATE expense_claims SET status=$1, reviewed_by=$2, reviewed_at=$3, updated_at=$3 WHERE id=$4`,
-		status, reviewerID, now, id)
-	if err != nil {
-		return nil, err
-	}
-	return r.FindByID(ctx, id)
+func (r *Repository) UpdateStatus(ctx context.Context, id string, from, to Status, reviewerID string) (*Claim, error) {
+	// The status condition makes the transition atomic: two concurrent reviewers
+	// can't both act on the same pending claim.
+	return scan(r.db.QueryRow(ctx,
+		`UPDATE expense_claims SET status=$1, reviewed_by=$2, reviewed_at=$3, updated_at=$3
+		 WHERE id=$4 AND status=$5 RETURNING `+cols,
+		to, reviewerID, time.Now(), id, from))
 }
 
 func (r *Repository) MarkPaid(ctx context.Context, id string, reviewerID string) (*Claim, error) {
 	now := time.Now()
-	_, err := r.db.Exec(ctx,
-		`UPDATE expense_claims SET status=$1, paid_at=$2, reviewed_by=$3, reviewed_at=$2, updated_at=$2 WHERE id=$4`,
-		StatusPaid, now, reviewerID, id)
-	if err != nil {
-		return nil, err
-	}
-	return r.FindByID(ctx, id)
+	return scan(r.db.QueryRow(ctx,
+		`UPDATE expense_claims SET status=$1, paid_at=$2, reviewed_by=$3, reviewed_at=$2, updated_at=$2
+		 WHERE id=$4 AND status=$5 RETURNING `+cols,
+		StatusPaid, now, reviewerID, id, StatusApproved))
 }
 
 func (r *Repository) Delete(ctx context.Context, id string) error {

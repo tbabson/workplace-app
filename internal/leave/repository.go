@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -62,14 +63,51 @@ func (r *Repository) List(ctx context.Context, userID string) ([]*Request, error
 
 func (r *Repository) Review(ctx context.Context, id, reviewerID string, status Status, note *string) error {
 	now := time.Now()
-	_, err := r.db.Exec(ctx,
-		`UPDATE leave_requests SET status=$1, reviewed_by=$2, reviewed_at=$3, review_note=$4, updated_at=$3 WHERE id=$5`,
+	tag, err := r.db.Exec(ctx,
+		`UPDATE leave_requests SET status=$1, reviewed_by=$2, reviewed_at=$3, review_note=$4, updated_at=$3
+		 WHERE id=$5 AND status='pending'`,
 		status, reviewerID, now, note, id)
+	if err == nil && tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
 	return err
 }
 
-func (r *Repository) Cancel(ctx context.Context, id string) error {
-	_, err := r.db.Exec(ctx, `UPDATE leave_requests SET status='cancelled', updated_at=$1 WHERE id=$2`, time.Now(), id)
+// Approve marks a pending request approved and deducts the days from the
+// balance for the leave's year in one transaction, so the two never diverge.
+func (r *Repository) Approve(ctx context.Context, req *Request, reviewerID string, note *string, year int) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now()
+	tag, err := tx.Exec(ctx,
+		`UPDATE leave_requests SET status=$1, reviewed_by=$2, reviewed_at=$3, review_note=$4, updated_at=$3
+		 WHERE id=$5 AND status='pending'`,
+		StatusApproved, reviewerID, now, note, req.ID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE leave_balances SET used = used + $1 WHERE user_id=$2 AND type=$3 AND year=$4`,
+		req.Days, req.UserID, req.Type, year); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *Repository) Cancel(ctx context.Context, id, userID string) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE leave_requests SET status='cancelled', updated_at=$1 WHERE id=$2 AND user_id=$3 AND status='pending'`,
+		time.Now(), id, userID)
+	if err == nil && tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
 	return err
 }
 
@@ -96,12 +134,5 @@ func (r *Repository) SetBalance(ctx context.Context, b *Balance) error {
 		`INSERT INTO leave_balances (user_id, type, year, total, used) VALUES ($1,$2,$3,$4,0)
 		 ON CONFLICT (user_id, type, year) DO UPDATE SET total=$4`,
 		b.UserID, b.Type, b.Year, b.Total)
-	return err
-}
-
-func (r *Repository) DeductBalance(ctx context.Context, userID string, leaveType Type, year, days int) error {
-	_, err := r.db.Exec(ctx,
-		`UPDATE leave_balances SET used = used + $1 WHERE user_id=$2 AND type=$3 AND year=$4`,
-		days, userID, leaveType, year)
 	return err
 }

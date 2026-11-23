@@ -6,8 +6,6 @@ import (
 
 	"workplace/pkg/middleware"
 	"workplace/pkg/response"
-
-	"github.com/go-chi/chi/v5"
 )
 
 type Handler struct {
@@ -18,47 +16,47 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-func (h *Handler) RegisterRoutes(r chi.Router) {
-	r.Use(middleware.ValidateUUIDParams("id", "userID"))
-	// Read-only — all authenticated roles
-	r.Get("/", h.list)
-	r.Get("/{id}", h.getByID)
-	r.Get("/{id}/assignees", h.assignees)
-	r.Get("/{id}/room", h.projectRoom)
-	r.Get("/{id}/history", h.history)
-	r.Get("/{id}/budget", h.getBudget)
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, prefix string) {
+	validate := middleware.ValidateUUIDParams("id", "userID")
+	// Read-only — anyone who can see the project (see Service.CanAccess)
+	anyRole := middleware.With(validate)
+	readable := middleware.With(validate, h.RequireAccess("id"))
 	// Project management — super_admin only
-	r.Group(func(r chi.Router) {
-		r.Use(middleware.RequireRole("super_admin"))
-		r.Post("/", h.create)
-		r.Put("/{id}", h.update)
-		r.Delete("/{id}", h.delete)
-		r.Put("/{id}/progress", h.updateProgress)
-		r.Post("/{id}/assign", h.assign)
-		r.Delete("/{id}/assign/{userID}", h.unassign)
-		r.Post("/{id}/files", h.addFile)
-		r.Delete("/{id}/files/{fileID}", h.deleteFile)
-	})
+	admin := middleware.With(validate, middleware.RequireRole(middleware.RoleSuperAdmin))
 	// Budget & expenses — procurement or super_admin
-	r.Group(func(r chi.Router) {
-		r.Use(middleware.RequireRole("super_admin", "procurement"))
-		r.Put("/{id}/budget", h.setBudget)
-		r.Post("/{id}/expenses", h.addExpense)
-		r.Delete("/{id}/expenses/{expenseID}", h.deleteExpense)
-	})
-	r.Get("/{id}/files", h.listFiles)
+	finance := middleware.With(validate, middleware.RequireRole(middleware.RoleSuperAdmin, middleware.RoleProcurement))
+
+	mux.Handle("GET "+prefix, anyRole(h.list))
+	mux.Handle("GET "+prefix+"/{id}", readable(h.getByID))
+	mux.Handle("GET "+prefix+"/{id}/assignees", readable(h.assignees))
+	mux.Handle("GET "+prefix+"/{id}/room", readable(h.projectRoom))
+	mux.Handle("GET "+prefix+"/{id}/history", readable(h.history))
+	mux.Handle("GET "+prefix+"/{id}/budget", readable(h.getBudget))
+	mux.Handle("GET "+prefix+"/{id}/files", readable(h.listFiles))
+
+	mux.Handle("POST "+prefix, admin(h.create))
+	mux.Handle("PUT "+prefix+"/{id}", admin(h.update))
+	mux.Handle("DELETE "+prefix+"/{id}", admin(h.delete))
+	mux.Handle("PUT "+prefix+"/{id}/progress", admin(h.updateProgress))
+	mux.Handle("POST "+prefix+"/{id}/assign", admin(h.assign))
+	mux.Handle("DELETE "+prefix+"/{id}/assign/{userID}", admin(h.unassign))
+	mux.Handle("POST "+prefix+"/{id}/files", admin(h.addFile))
+	mux.Handle("DELETE "+prefix+"/{id}/files/{fileID}", admin(h.deleteFile))
+
+	mux.Handle("PUT "+prefix+"/{id}/budget", finance(h.setBudget))
+	mux.Handle("POST "+prefix+"/{id}/expenses", finance(h.addExpense))
+	mux.Handle("DELETE "+prefix+"/{id}/expenses/{expenseID}", finance(h.deleteExpense))
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	role := middleware.GetRole(r)
-	deptID := ""
-	if role == "staff" || role == "dept_head" {
-		deptID = middleware.GetDeptID(r)
+	scopeUserID := ""
+	if !middleware.HasRole(r, middleware.RoleSuperAdmin, middleware.RoleProcurement) {
+		scopeUserID = middleware.GetUserID(r)
 	}
 
-	projects, err := h.svc.List(r.Context(), deptID)
+	projects, err := h.svc.List(r.Context(), middleware.GetDeptID(r), scopeUserID)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, projects, len(projects))
@@ -80,7 +78,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getByID(w http.ResponseWriter, r *http.Request) {
-	p, err := h.svc.GetByID(r.Context(), chi.URLParam(r, "id"))
+	p, err := h.svc.GetByID(r.Context(), r.PathValue("id"))
 	if err != nil {
 		response.Error(w, http.StatusNotFound, "project not found")
 		return
@@ -95,9 +93,9 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, err := h.svc.Update(r.Context(), chi.URLParam(r, "id"), middleware.GetUserID(r), dto)
+	p, err := h.svc.Update(r.Context(), r.PathValue("id"), middleware.GetUserID(r), dto)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, p)
@@ -110,7 +108,7 @@ func (h *Handler) updateProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.UpdateProgress(r.Context(), chi.URLParam(r, "id"), middleware.GetUserID(r), dto); err != nil {
+	if err := h.svc.UpdateProgress(r.Context(), r.PathValue("id"), middleware.GetUserID(r), dto); err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -118,8 +116,8 @@ func (h *Handler) updateProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
-	if err := h.svc.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+	if err := h.svc.Delete(r.Context(), r.PathValue("id")); err != nil {
+		response.ServerError(w, r, err)
 		return
 	}
 	response.Message(w, http.StatusOK, "Project deleted successfully")
@@ -132,32 +130,32 @@ func (h *Handler) assign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.Assign(r.Context(), chi.URLParam(r, "id"), dto.UserID); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+	if err := h.svc.Assign(r.Context(), r.PathValue("id"), dto.UserID); err != nil {
+		response.ServerError(w, r, err)
 		return
 	}
 	response.Message(w, http.StatusOK, "User assigned to project successfully and added to project chat")
 }
 
 func (h *Handler) unassign(w http.ResponseWriter, r *http.Request) {
-	if err := h.svc.Unassign(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "userID")); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+	if err := h.svc.Unassign(r.Context(), r.PathValue("id"), r.PathValue("userID")); err != nil {
+		response.ServerError(w, r, err)
 		return
 	}
 	response.Message(w, http.StatusOK, "User unassigned from project successfully and removed from project chat")
 }
 
 func (h *Handler) assignees(w http.ResponseWriter, r *http.Request) {
-	ids, err := h.svc.GetAssignees(r.Context(), chi.URLParam(r, "id"))
+	ids, err := h.svc.GetAssignees(r.Context(), r.PathValue("id"))
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, ids, len(ids))
 }
 
 func (h *Handler) projectRoom(w http.ResponseWriter, r *http.Request) {
-	room, err := h.svc.GetProjectRoom(r.Context(), chi.URLParam(r, "id"))
+	room, err := h.svc.GetProjectRoom(r.Context(), r.PathValue("id"))
 	if err != nil {
 		response.Error(w, http.StatusNotFound, "project chat room not found")
 		return
@@ -166,18 +164,18 @@ func (h *Handler) projectRoom(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
-	list, err := h.svc.GetHistory(r.Context(), chi.URLParam(r, "id"))
+	list, err := h.svc.GetHistory(r.Context(), r.PathValue("id"))
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, list, len(list))
 }
 
 func (h *Handler) getBudget(w http.ResponseWriter, r *http.Request) {
-	summary, err := h.svc.GetBudget(r.Context(), chi.URLParam(r, "id"))
+	summary, err := h.svc.GetBudget(r.Context(), r.PathValue("id"))
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, summary)
@@ -189,8 +187,8 @@ func (h *Handler) setBudget(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := h.svc.SetBudget(r.Context(), chi.URLParam(r, "id"), middleware.GetUserID(r), dto); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+	if err := h.svc.SetBudget(r.Context(), r.PathValue("id"), middleware.GetUserID(r), dto); err != nil {
+		response.ServerError(w, r, err)
 		return
 	}
 	response.Message(w, http.StatusOK, "Budget updated successfully")
@@ -202,7 +200,7 @@ func (h *Handler) addExpense(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	e, err := h.svc.AddExpense(r.Context(), chi.URLParam(r, "id"), dto, middleware.GetUserID(r))
+	e, err := h.svc.AddExpense(r.Context(), r.PathValue("id"), dto, middleware.GetUserID(r))
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -211,17 +209,17 @@ func (h *Handler) addExpense(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteExpense(w http.ResponseWriter, r *http.Request) {
-	if err := h.svc.DeleteExpense(r.Context(), chi.URLParam(r, "expenseID")); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+	if err := h.svc.DeleteExpense(r.Context(), r.PathValue("id"), r.PathValue("expenseID")); err != nil {
+		response.ServerError(w, r, err)
 		return
 	}
 	response.Message(w, http.StatusOK, "Expense deleted successfully")
 }
 
 func (h *Handler) listFiles(w http.ResponseWriter, r *http.Request) {
-	list, err := h.svc.ListFiles(r.Context(), chi.URLParam(r, "id"))
+	list, err := h.svc.ListFiles(r.Context(), r.PathValue("id"))
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, list, len(list))
@@ -233,7 +231,7 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	f, err := h.svc.AddFile(r.Context(), chi.URLParam(r, "id"), dto, middleware.GetUserID(r))
+	f, err := h.svc.AddFile(r.Context(), r.PathValue("id"), dto, middleware.GetUserID(r))
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -242,9 +240,35 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteFile(w http.ResponseWriter, r *http.Request) {
-	if err := h.svc.DeleteFile(r.Context(), chi.URLParam(r, "fileID")); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+	if err := h.svc.DeleteFile(r.Context(), r.PathValue("id"), r.PathValue("fileID")); err != nil {
+		response.ServerError(w, r, err)
 		return
 	}
 	response.Message(w, http.StatusOK, "File deleted successfully")
+}
+
+// RequireAccess returns middleware that responds 404 unless the caller may read
+// the project whose ID is in the given path parameter. Other packages use it to
+// protect routes nested under a project.
+func (h *Handler) RequireAccess(param string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p, err := h.svc.GetByID(r.Context(), r.PathValue(param))
+			if err != nil {
+				response.Error(w, http.StatusNotFound, "project not found")
+				return
+			}
+			ok, err := h.svc.CanAccess(r.Context(), p,
+				middleware.GetUserID(r), middleware.GetRole(r), middleware.GetDeptID(r))
+			if err != nil {
+				response.ServerError(w, r, err)
+				return
+			}
+			if !ok {
+				response.Error(w, http.StatusNotFound, "project not found")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

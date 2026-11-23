@@ -44,7 +44,7 @@ Workplace App is an internal company management platform. It provides:
 | Layer            | Technology                                                     |
 | ---------------- | -------------------------------------------------------------- |
 | Language         | Go 1.22                                                        |
-| HTTP Router      | [chi v5](https://github.com/go-chi/chi)                        |
+| HTTP Router      | Standard library [net/http](https://pkg.go.dev/net/http) `ServeMux` |
 | Database         | PostgreSQL 16 via [pgx v5](https://github.com/jackc/pgx)       |
 | Cache            | Redis 7 via [go-redis v9](https://github.com/redis/go-redis)   |
 | WebSockets       | [gorilla/websocket](https://github.com/gorilla/websocket)      |
@@ -152,7 +152,7 @@ Services after startup:
 
 ```bash
 # Ensure PostgreSQL and Redis are running locally, then:
-go run ./cmd/server/main.go
+go run ./cmd/server
 ```
 
 ---
@@ -237,7 +237,7 @@ Run migrations in order. Each file is idempotent where possible (`IF NOT EXISTS`
 | File                              | Description                                                               |
 | --------------------------------- | ------------------------------------------------------------------------- |
 | `001_schema.sql`                  | Core schema: all primary tables and relationships                         |
-| `002_seed.sql`                    | Default super admin user                                                  |
+| `002_seed.sql`                    | Empty placeholder (see "First admin account" below)                       |
 | `003_add_user_role.sql`           | Adds `user` role to enum                                                  |
 | `004_user_position_dept_name.sql` | Adds `position` and `department_name` columns to users                    |
 | `005_new_features.sql`            | Adds tasks, milestones, comments, project history, budget, files, queries |
@@ -246,6 +246,12 @@ Run migrations in order. Each file is idempotent where possible (`IF NOT EXISTS`
 | `008_memo_acknowledgements.sql`   | Per-user memo acknowledgement junction table                              |
 | `009_attendance_auto_closed.sql`  | Adds `auto_closed` flag to attendance records                             |
 | `010_attendance_device_id.sql`    | Adds `device_id` column for buddy-punch prevention                        |
+
+With Docker Compose, every migration runs automatically the first time Postgres starts with an empty data volume.
+
+### First admin account
+
+No credentials are seeded. On startup, if no `super_admin` exists, the app creates one from `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`. Remove those variables once the account exists.
 
 To apply a migration against the running Docker container:
 
@@ -316,7 +322,6 @@ make run        # Run server locally (go run)
 make tidy       # go mod tidy
 make lint       # Run golangci-lint
 make test       # Run all tests
-make seed       # Apply seed migration (002)
 ```
 
 ---

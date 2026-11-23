@@ -4,18 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"net/mail"
+	"strings"
 	"time"
 
 	"workplace/pkg/cache"
+	"workplace/pkg/middleware"
 	"workplace/pkg/utils"
 )
 
 const (
-	ttlUser = 10 * time.Minute
+	ttlUser        = 10 * time.Minute
+	minPasswordLen = 8
 )
 
-func userKey(id string) string    { return fmt.Sprintf("user:id:%s", id) }
-func emailKey(email string) string { return fmt.Sprintf("user:email:%s", email) }
+func userKey(id string) string { return fmt.Sprintf("user:id:%s", id) }
 
 type Service struct {
 	repo  *Repository
@@ -26,19 +30,37 @@ func NewService(repo *Repository, c *cache.Cache) *Service {
 	return &Service{repo: repo, cache: c}
 }
 
+func (r Role) Valid() bool {
+	switch r {
+	case RoleSuperAdmin, RoleDeptHead, RoleStaff, RoleProcurement:
+		return true
+	}
+	return false
+}
+
 func (s *Service) Create(ctx context.Context, dto CreateUserDTO) (*User, error) {
+	dto.Email = strings.ToLower(strings.TrimSpace(dto.Email))
 	if dto.Name == "" || dto.Email == "" || dto.Password == "" {
 		return nil, errors.New("name, email and password are required")
 	}
-
-	hash, err := utils.HashPassword(dto.Password)
-	if err != nil {
-		return nil, err
+	if _, err := mail.ParseAddress(dto.Email); err != nil {
+		return nil, errors.New("invalid email address")
+	}
+	if len(dto.Password) < minPasswordLen {
+		return nil, fmt.Errorf("password must be at least %d characters", minPasswordLen)
 	}
 
 	role := dto.Role
 	if role == "" {
 		role = RoleStaff
+	}
+	if !role.Valid() {
+		return nil, errors.New("invalid role")
+	}
+
+	hash, err := utils.HashPassword(dto.Password)
+	if err != nil {
+		return nil, err
 	}
 
 	u := &User{
@@ -53,11 +75,17 @@ func (s *Service) Create(ctx context.Context, dto CreateUserDTO) (*User, error) 
 	}
 
 	if err := s.repo.Create(ctx, u); err != nil {
+		if strings.Contains(err.Error(), "23505") {
+			return nil, errors.New("a user with this email already exists")
+		}
 		return nil, err
 	}
 	return u, nil
 }
 
+// GetByID returns a user, served from cache when possible. The cached copy never
+// contains the password hash (it is excluded from JSON), so never use it for
+// authentication — use GetForLogin instead.
 func (s *Service) GetByID(ctx context.Context, id string) (*User, error) {
 	if u, ok := cache.Get[User](ctx, s.cache, userKey(id)); ok {
 		return u, nil
@@ -70,16 +98,22 @@ func (s *Service) GetByID(ctx context.Context, id string) (*User, error) {
 	return u, nil
 }
 
-func (s *Service) GetByEmail(ctx context.Context, email string) (*User, error) {
-	if u, ok := cache.Get[User](ctx, s.cache, emailKey(email)); ok {
-		return u, nil
-	}
-	u, err := s.repo.FindByEmail(ctx, email)
+// GetForLogin always reads from the database so the password hash is present.
+func (s *Service) GetForLogin(ctx context.Context, email string) (*User, error) {
+	return s.repo.FindByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
+}
+
+// Identity implements middleware.IdentityLookup.
+func (s *Service) Identity(ctx context.Context, id string) (*middleware.Identity, error) {
+	u, err := s.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	cache.Set(ctx, s.cache, emailKey(email), u, ttlUser)
-	return u, nil
+	dept := ""
+	if u.DepartmentID != nil {
+		dept = *u.DepartmentID
+	}
+	return &middleware.Identity{Role: string(u.Role), DepartmentID: dept, Active: u.IsActive}, nil
 }
 
 func (s *Service) List(ctx context.Context) ([]*User, error) {
@@ -91,24 +125,42 @@ func (s *Service) ListByDepartment(ctx context.Context, deptID string) ([]*User,
 }
 
 func (s *Service) Update(ctx context.Context, id string, dto UpdateUserDTO) (*User, error) {
+	if dto.Role != nil && !dto.Role.Valid() {
+		return nil, errors.New("invalid role")
+	}
 	u, err := s.repo.Update(ctx, id, dto)
 	if err != nil {
 		return nil, err
 	}
-	// Invalidate both keys — email may have been indirectly stale too
-	cache.Delete(ctx, s.cache, userKey(id), emailKey(u.Email))
+	cache.Delete(ctx, s.cache, userKey(id))
 	return u, nil
 }
 
 func (s *Service) Delete(ctx context.Context, id string) error {
-	u, _ := s.repo.FindByID(ctx, id)
 	if err := s.repo.Delete(ctx, id); err != nil {
 		return err
 	}
-	keys := []string{userKey(id)}
-	if u != nil {
-		keys = append(keys, emailKey(u.Email))
-	}
-	cache.Delete(ctx, s.cache, keys...)
+	cache.Delete(ctx, s.cache, userKey(id))
 	return nil
+}
+
+// EnsureSuperAdmin creates the first super_admin from configuration when the
+// database has none. It does nothing if a super_admin already exists.
+func (s *Service) EnsureSuperAdmin(ctx context.Context, email, password string) error {
+	admins, err := s.repo.ListByRole(ctx, string(RoleSuperAdmin))
+	if err != nil {
+		return err
+	}
+	if len(admins) > 0 {
+		return nil
+	}
+	if email == "" || password == "" {
+		log.Println("WARNING: no super_admin exists; set BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD to create one")
+		return nil
+	}
+	_, err = s.Create(ctx, CreateUserDTO{Name: "Admin", Email: email, Password: password, Role: RoleSuperAdmin})
+	if err == nil {
+		log.Println("created bootstrap super_admin account")
+	}
+	return err
 }

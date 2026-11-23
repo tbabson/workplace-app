@@ -50,16 +50,18 @@ func (h *Hub) Run() {
 			h.mu.Unlock()
 
 		case env := <-h.push:
-			h.mu.RLock()
-			c, ok := h.clients[env.userID]
-			h.mu.RUnlock()
-			if ok {
+			h.mu.Lock()
+			if c, ok := h.clients[env.userID]; ok {
 				select {
 				case c.send <- env.payload:
 				default:
-					h.unregister <- c
+					// Slow client: drop it here. Sending to h.unregister from the
+					// hub's own goroutine could deadlock once that buffer fills.
+					delete(h.clients, c.userID)
+					close(c.send)
 				}
 			}
+			h.mu.Unlock()
 		}
 	}
 }

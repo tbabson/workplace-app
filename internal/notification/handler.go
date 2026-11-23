@@ -6,38 +6,38 @@ import (
 	"workplace/pkg/middleware"
 	"workplace/pkg/response"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  512,
-	WriteBufferSize: 512,
-	CheckOrigin:     func(r *http.Request) bool { return true },
-}
-
 type Handler struct {
-	svc *Service
-	hub *Hub
+	svc      *Service
+	hub      *Hub
+	upgrader websocket.Upgrader
 }
 
-func NewHandler(svc *Service, hub *Hub) *Handler {
-	return &Handler{svc: svc, hub: hub}
+// NewHandler creates the notification handler. checkOrigin decides which browser
+// origins may open the notification WebSocket.
+func NewHandler(svc *Service, hub *Hub, checkOrigin func(*http.Request) bool) *Handler {
+	return &Handler{svc: svc, hub: hub, upgrader: websocket.Upgrader{
+		ReadBufferSize:  512,
+		WriteBufferSize: 512,
+		CheckOrigin:     checkOrigin,
+	}}
 }
 
-func (h *Handler) RegisterRoutes(r chi.Router) {
-	r.Get("/", h.list)
-	r.Get("/unread-count", h.unreadCount)
-	r.Put("/{id}/read", h.markRead)
-	r.Put("/read-all", h.markAllRead)
-	r.Delete("/clear-all", h.clearAll)
-	r.Get("/ws", h.wsConnect)
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, prefix string) {
+	mux.HandleFunc("GET "+prefix, h.list)
+	mux.HandleFunc("GET "+prefix+"/unread-count", h.unreadCount)
+	mux.HandleFunc("PUT "+prefix+"/{id}/read", h.markRead)
+	mux.HandleFunc("PUT "+prefix+"/read-all", h.markAllRead)
+	mux.HandleFunc("DELETE "+prefix+"/clear-all", h.clearAll)
+	mux.HandleFunc("GET "+prefix+"/ws", h.wsConnect)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	list, err := h.svc.List(r.Context(), middleware.GetUserID(r))
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, list, len(list))
@@ -46,15 +46,15 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) unreadCount(w http.ResponseWriter, r *http.Request) {
 	count, err := h.svc.UnreadCount(r.Context(), middleware.GetUserID(r))
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]int{"unread": count})
 }
 
 func (h *Handler) markRead(w http.ResponseWriter, r *http.Request) {
-	if err := h.svc.MarkRead(r.Context(), chi.URLParam(r, "id"), middleware.GetUserID(r)); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+	if err := h.svc.MarkRead(r.Context(), r.PathValue("id"), middleware.GetUserID(r)); err != nil {
+		response.ServerError(w, r, err)
 		return
 	}
 	response.Message(w, http.StatusOK, "Notification marked as read successfully")
@@ -62,7 +62,7 @@ func (h *Handler) markRead(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) markAllRead(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.MarkAllRead(r.Context(), middleware.GetUserID(r)); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.Message(w, http.StatusOK, "All notifications marked as read successfully")
@@ -70,7 +70,7 @@ func (h *Handler) markAllRead(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) clearAll(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.ClearAll(r.Context(), middleware.GetUserID(r)); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.Message(w, http.StatusOK, "All notifications cleared successfully")
@@ -80,7 +80,7 @@ func (h *Handler) clearAll(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) wsConnect(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r)
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}

@@ -36,6 +36,11 @@ func NewService(repo *Repository, notifSvc *notification.Service, userRepo *user
 }
 
 func (s *Service) SignIn(ctx context.Context, userID string, dto SignInDTO) (*Attendance, error) {
+	if dto.Latitude < -90 || dto.Latitude > 90 || dto.Longitude < -180 || dto.Longitude > 180 {
+		return nil, errors.New("invalid coordinates")
+	}
+	// Note: coordinates come from the client, so the geofence is a deterrent,
+	// not proof of presence.
 	if !utils.IsWithinGeofence(dto.Latitude, dto.Longitude, s.companyLat, s.companyLng, s.geofenceRadius) {
 		return nil, errors.New("you are not within the company premises")
 	}
@@ -50,7 +55,10 @@ func (s *Service) SignIn(ctx context.Context, userID string, dto SignInDTO) (*At
 	}
 
 	// Device lock: block if this device already signed in a different user today
-	if s.deviceLockEnabled && dto.DeviceID != "" {
+	if s.deviceLockEnabled {
+		if dto.DeviceID == "" {
+			return nil, errors.New("device_id is required")
+		}
 		taken, err := s.repo.IsDeviceSignedInToday(ctx, dto.DeviceID, userID)
 		if err != nil {
 			return nil, err

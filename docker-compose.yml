@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "5002:5002"
+      - "127.0.0.1:5002:5002" # direct access for local debugging only; use nginx
     depends_on:
       postgres:
         condition: service_healthy
@@ -36,12 +36,8 @@ services:
       - "127.0.0.1:5555:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./migrations/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql
-      - ./migrations/002_seed.sql:/docker-entrypoint-initdb.d/002_seed.sql
-      - ./migrations/003_add_user_role.sql:/docker-entrypoint-initdb.d/003_add_user_role.sql
-      - ./migrations/004_user_position_dept_name.sql:/docker-entrypoint-initdb.d/004_user_position_dept_name.sql
-      - ./migrations/005_new_features.sql:/docker-entrypoint-initdb.d/005_new_features.sql
-      - ./migrations/006_remove_user_role.sql:/docker-entrypoint-initdb.d/006_remove_user_role.sql
+      # Every migration runs in filename order on first start (empty data volume).
+      - ./migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         [
@@ -90,8 +86,8 @@ services:
     container_name: workplace_mailhog
     restart: unless-stopped
     ports:
-      - "1025:1025" # SMTP
-      - "8025:8025" # Web UI — open http://localhost:8025 to read emails
+      - "127.0.0.1:1025:1025" # SMTP
+      - "127.0.0.1:8025:8025" # Web UI — open http://localhost:8025 to read emails
     networks:
       - workplace_net
 

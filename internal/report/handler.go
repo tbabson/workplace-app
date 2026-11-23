@@ -5,20 +5,20 @@ import (
 
 	"workplace/pkg/middleware"
 	"workplace/pkg/response"
-
-	"github.com/go-chi/chi/v5"
 )
 
 type Handler struct{ svc *Service }
 
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 
-func (h *Handler) RegisterRoutes(r chi.Router) {
-	r.Get("/dashboard", h.dashboard)
-	r.Get("/attendance", h.attendance)
-	r.Get("/attendance/export", h.attendanceCSV)
-	r.Get("/overtime", h.overtime)
-	r.Get("/overtime/export", h.overtimeCSV)
+func (h *Handler) RegisterRoutes(mux *http.ServeMux, prefix string) {
+	manager := middleware.With(middleware.RequireRole(middleware.RoleSuperAdmin, middleware.RoleDeptHead))
+
+	mux.HandleFunc("GET "+prefix+"/dashboard", h.dashboard)
+	mux.Handle("GET "+prefix+"/attendance", manager(h.attendance))
+	mux.Handle("GET "+prefix+"/attendance/export", manager(h.attendanceCSV))
+	mux.Handle("GET "+prefix+"/overtime", manager(h.overtime))
+	mux.Handle("GET "+prefix+"/overtime/export", manager(h.overtimeCSV))
 }
 
 func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
@@ -27,7 +27,7 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 	deptID := middleware.GetDeptID(r)
 	data, err := h.svc.Dashboard(r.Context(), userID, role, deptID)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, data)
@@ -38,7 +38,7 @@ func (h *Handler) attendance(w http.ResponseWriter, r *http.Request) {
 	to := r.URL.Query().Get("to")
 	rows, err := h.svc.AttendanceReport(r.Context(), from, to)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, rows, len(rows))
@@ -49,7 +49,7 @@ func (h *Handler) attendanceCSV(w http.ResponseWriter, r *http.Request) {
 	to := r.URL.Query().Get("to")
 	data, err := h.svc.AttendanceCSV(r.Context(), from, to)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv")
@@ -63,7 +63,7 @@ func (h *Handler) overtime(w http.ResponseWriter, r *http.Request) {
 	to := r.URL.Query().Get("to")
 	rows, err := h.svc.OvertimeReport(r.Context(), from, to)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, rows, len(rows))
@@ -74,7 +74,7 @@ func (h *Handler) overtimeCSV(w http.ResponseWriter, r *http.Request) {
 	to := r.URL.Query().Get("to")
 	data, err := h.svc.OvertimeCSV(r.Context(), from, to)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
+		response.ServerError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv")

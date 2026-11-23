@@ -2,8 +2,11 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"workplace/internal/user"
@@ -11,6 +14,20 @@ import (
 
 	"github.com/redis/go-redis/v9"
 )
+
+const (
+	maxFailedLogins = 10
+	failWindow      = 15 * time.Minute
+)
+
+var (
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrTooManyAttempts    = errors.New("too many failed login attempts; try again later")
+)
+
+// dummyHash is compared against when the email doesn't exist, so a login for an
+// unknown email takes as long as one for a real account.
+var dummyHash, _ = utils.HashPassword("dummy-password-for-timing")
 
 type Service struct {
 	userSvc       *user.Service
@@ -28,20 +45,41 @@ func NewService(userSvc *user.Service, secret string, expHrs int, rdb *redis.Cli
 	}
 }
 
+// TokenTTL is how long issued tokens (and the auth cookie) are valid.
+func (s *Service) TokenTTL() time.Duration {
+	return time.Duration(s.expirationHrs) * time.Hour
+}
+
+func failKey(email string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	return "login:fail:" + hex.EncodeToString(sum[:])
+}
+
 func (s *Service) Login(ctx context.Context, dto LoginDTO) (string, error) {
-	u, err := s.userSvc.GetByEmail(ctx, dto.Email)
+	key := failKey(dto.Email)
+	if n, err := s.rdb.Get(ctx, key).Int(); err == nil && n >= maxFailedLogins {
+		return "", ErrTooManyAttempts
+	}
+
+	u, err := s.userSvc.GetForLogin(ctx, dto.Email)
 	if err != nil {
-		log.Printf("login: lookup failed for %s: %v", dto.Email, err)
-		return "", errors.New("invalid credentials")
+		utils.CheckPassword(dto.Password, dummyHash)
+		s.recordFailure(ctx, key)
+		return "", ErrInvalidCredentials
+	}
+
+	// Check the password before anything else so the response never reveals
+	// whether an account exists or is deactivated to someone without the password.
+	if !utils.CheckPassword(dto.Password, u.PasswordHash) {
+		s.recordFailure(ctx, key)
+		return "", ErrInvalidCredentials
 	}
 
 	if !u.IsActive {
 		return "", errors.New("account is deactivated")
 	}
 
-	if !utils.CheckPassword(dto.Password, u.PasswordHash) {
-		return "", errors.New("invalid credentials")
-	}
+	s.rdb.Del(ctx, key)
 
 	deptID := ""
 	if u.DepartmentID != nil {
@@ -51,7 +89,15 @@ func (s *Service) Login(ctx context.Context, dto LoginDTO) (string, error) {
 	return utils.GenerateToken(u.ID, string(u.Role), deptID, s.secret, s.expirationHrs)
 }
 
+func (s *Service) recordFailure(ctx context.Context, key string) {
+	pipe := s.rdb.TxPipeline()
+	pipe.Incr(ctx, key)
+	pipe.Expire(ctx, key, failWindow)
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Printf("login: record failed attempt: %v", err)
+	}
+}
+
 func (s *Service) Logout(ctx context.Context, token string) error {
-	return s.rdb.Set(ctx, "blacklist:"+token, "1",
-		time.Duration(s.expirationHrs)*time.Hour).Err()
+	return s.rdb.Set(ctx, "blacklist:"+token, "1", s.TokenTTL()).Err()
 }

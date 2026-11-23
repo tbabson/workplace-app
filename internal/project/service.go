@@ -8,6 +8,7 @@ import (
 	"workplace/internal/chat"
 	"workplace/internal/notification"
 	"workplace/internal/user"
+	"workplace/pkg/utils"
 )
 
 type Service struct {
@@ -82,8 +83,8 @@ func (s *Service) GetByID(ctx context.Context, id string) (*Project, error) {
 	return s.repo.FindByID(ctx, id)
 }
 
-func (s *Service) List(ctx context.Context, deptID string) ([]*Project, error) {
-	return s.repo.List(ctx, deptID)
+func (s *Service) List(ctx context.Context, deptID, scopeUserID string) ([]*Project, error) {
+	return s.repo.List(ctx, deptID, scopeUserID)
 }
 
 func (s *Service) Update(ctx context.Context, id, changedBy string, dto UpdateProjectDTO) (*Project, error) {
@@ -139,6 +140,8 @@ func (s *Service) UpdateProgress(ctx context.Context, id, changedBy string, dto 
 
 	// Notify all assignees of the progress update — in-app + email
 	go func() {
+		// The request context is cancelled once the handler returns.
+		ctx := context.Background()
 		p, err := s.repo.FindByID(ctx, id)
 		if err != nil {
 			return
@@ -182,6 +185,8 @@ func (s *Service) Assign(ctx context.Context, projectID, userID string) error {
 	}
 
 	go func() {
+		// The request context is cancelled once the handler returns.
+		ctx := context.Background()
 		u, err := s.userRepo.FindByID(ctx, userID)
 		if err != nil {
 			return
@@ -213,6 +218,8 @@ func (s *Service) Unassign(ctx context.Context, projectID, userID string) error 
 	}
 
 	go func() {
+		// The request context is cancelled once the handler returns.
+		ctx := context.Background()
 		u, err := s.userRepo.FindByID(ctx, userID)
 		if err != nil {
 			return
@@ -295,13 +302,16 @@ func (s *Service) AddExpense(ctx context.Context, projectID string, dto AddExpen
 	return e, s.budgetRepo.AddExpense(ctx, e)
 }
 
-func (s *Service) DeleteExpense(ctx context.Context, id string) error {
-	return s.budgetRepo.DeleteExpense(ctx, id)
+func (s *Service) DeleteExpense(ctx context.Context, projectID, id string) error {
+	return s.budgetRepo.DeleteExpense(ctx, projectID, id)
 }
 
 func (s *Service) AddFile(ctx context.Context, projectID string, dto AddFileDTO, uploadedBy string) (*File, error) {
 	if dto.Name == "" || dto.URL == "" {
 		return nil, errors.New("name and url are required")
+	}
+	if err := utils.ValidateHTTPURL(dto.URL); err != nil {
+		return nil, err
 	}
 	f := &File{ProjectID: projectID, Name: dto.Name, URL: dto.URL, Size: dto.Size, UploadedBy: uploadedBy}
 	return f, s.fileRepo.Add(ctx, f)
@@ -311,10 +321,23 @@ func (s *Service) ListFiles(ctx context.Context, projectID string) ([]*File, err
 	return s.fileRepo.List(ctx, projectID)
 }
 
-func (s *Service) DeleteFile(ctx context.Context, id string) error {
-	return s.fileRepo.Delete(ctx, id)
+func (s *Service) DeleteFile(ctx context.Context, projectID, id string) error {
+	return s.fileRepo.Delete(ctx, projectID, id)
 }
 
 func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
+}
+
+// CanAccess reports whether a user with the given role and department may read
+// a project: super_admin and procurement see everything; everyone else sees
+// projects in their department and projects they are assigned to.
+func (s *Service) CanAccess(ctx context.Context, p *Project, userID, role, deptID string) (bool, error) {
+	if role == "super_admin" || role == "procurement" {
+		return true, nil
+	}
+	if deptID != "" && p.DepartmentID != nil && *p.DepartmentID == deptID {
+		return true, nil
+	}
+	return s.repo.IsAssigned(ctx, p.ID, userID)
 }

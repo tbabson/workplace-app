@@ -25,8 +25,9 @@ func (s *Service) Create(ctx context.Context, dto CreateAssetDTO) (*Asset, error
 	return a, s.repo.Create(ctx, a)
 }
 
-func (s *Service) List(ctx context.Context, role, userID string) ([]*Asset, error) {
-	if role == "staff" || role == "procurement" {
+// List returns only assets assigned to userID when ownOnly is true, otherwise all.
+func (s *Service) List(ctx context.Context, ownOnly bool, userID string) ([]*Asset, error) {
+	if ownOnly {
 		return s.repo.List(ctx, userID)
 	}
 	return s.repo.List(ctx, "")

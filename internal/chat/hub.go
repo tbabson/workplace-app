@@ -20,13 +20,17 @@ type Hub struct {
 	unregister chan *Client
 	broadcast  chan *broadcastMsg
 	typing     chan *typingEvent
+	kick       chan kickReq
 }
 
+type kickReq struct {
+	roomID string
+	userID string
+}
+
+// broadcastMsg is a message that has already been saved.
 type broadcastMsg struct {
-	roomID    string
-	senderID  string
-	content   string
-	replyToID *string
+	msg *Message
 }
 
 type typingEvent struct {
@@ -44,6 +48,7 @@ func NewHub(repo *Repository, userRepo *user.Repository, notifSvc *notification.
 		unregister: make(chan *Client, 128),
 		broadcast:  make(chan *broadcastMsg, 256),
 		typing:     make(chan *typingEvent, 256),
+		kick:       make(chan kickReq, 64),
 	}
 }
 
@@ -60,13 +65,14 @@ func (h *Hub) Run() {
 
 		case client := <-h.unregister:
 			h.mu.Lock()
-			if members, ok := h.rooms[client.roomID]; ok {
-				if members[client] {
-					delete(members, client)
-					close(client.send)
-				}
-				if len(members) == 0 {
-					delete(h.rooms, client.roomID)
+			h.removeLocked(client)
+			h.mu.Unlock()
+
+		case k := <-h.kick:
+			h.mu.Lock()
+			for c := range h.rooms[k.roomID] {
+				if c.userID == k.userID {
+					h.removeLocked(c)
 				}
 			}
 			h.mu.Unlock()
@@ -80,36 +86,47 @@ func (h *Hub) Run() {
 	}
 }
 
-func (h *Hub) deliverToRoom(msg *broadcastMsg) {
-	m := &Message{RoomID: msg.roomID, SenderID: msg.senderID, Content: msg.content, ReplyToID: msg.replyToID}
-	if err := h.repo.SaveMessage(context.Background(), m); err != nil {
-		log.Printf("save message: %v", err)
+// removeLocked unregisters a client and closes its send channel, which makes its
+// WritePump close the connection. Callers must hold h.mu for writing.
+func (h *Hub) removeLocked(c *Client) {
+	members, ok := h.rooms[c.roomID]
+	if !ok || !members[c] {
 		return
 	}
+	delete(members, c)
+	close(c.send)
+	if len(members) == 0 {
+		delete(h.rooms, c.roomID)
+	}
+}
+
+func (h *Hub) deliverToRoom(b *broadcastMsg) {
+	m := b.msg
 
 	payload, _ := json.Marshal(WSMessage{
 		Type:      "message",
-		Content:   msg.content,
-		SenderID:  msg.senderID,
-		RoomID:    msg.roomID,
+		Content:   m.Content,
+		SenderID:  m.SenderID,
+		RoomID:    m.RoomID,
 		MessageID: m.ID,
-		ReplyToID: msg.replyToID,
+		ReplyToID: m.ReplyToID,
 	})
 
-	h.mu.RLock()
-	members := h.rooms[msg.roomID]
+	// This runs on the hub goroutine, so it must never send to the hub's own
+	// channels. Clients whose buffers are full are dropped directly.
+	h.mu.Lock()
 	connectedUsers := make(map[string]bool)
-	for c := range members {
-		connectedUsers[c.userID] = true
+	for c := range h.rooms[m.RoomID] {
 		select {
 		case c.send <- payload:
+			connectedUsers[c.userID] = true
 		default:
-			h.unregister <- c
+			h.removeLocked(c)
 		}
 	}
-	h.mu.RUnlock()
+	h.mu.Unlock()
 
-	go h.notifyOfflineMembers(msg.roomID, msg.senderID, msg.content, connectedUsers)
+	go h.notifyOfflineMembers(m.RoomID, m.SenderID, m.Content, connectedUsers)
 }
 
 func (h *Hub) fanOutTyping(ev *typingEvent) {
@@ -170,17 +187,32 @@ func (h *Hub) notifyOfflineMembers(roomID, senderID, content string, connectedUs
 	h.notifSvc.NotifyMany(ctx, inputs)
 }
 
+// Broadcast saves a message and fans it out to the room. It is called from each
+// client's ReadPump goroutine, so the database write doesn't stall the hub.
 func (h *Hub) Broadcast(roomID, senderID, content string, replyToID *string) {
-	h.broadcast <- &broadcastMsg{roomID: roomID, senderID: senderID, content: content, replyToID: replyToID}
+	m := &Message{RoomID: roomID, SenderID: senderID, Content: content, ReplyToID: replyToID}
+	if err := h.repo.SaveMessage(context.Background(), m); err != nil {
+		log.Printf("save message: %v", err)
+		return
+	}
+	h.broadcast <- &broadcastMsg{msg: m}
+}
+
+// Kick disconnects every live connection userID has to roomID, e.g. after they
+// are removed from the room.
+func (h *Hub) Kick(roomID, userID string) {
+	h.kick <- kickReq{roomID: roomID, userID: userID}
 }
 
 func (h *Hub) SendTyping(roomID, senderID string) {
 	h.typing <- &typingEvent{roomID: roomID, senderID: senderID}
 }
 
+// truncate shortens s to at most n characters without splitting a UTF-8 sequence.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string(r[:n]) + "…"
 }

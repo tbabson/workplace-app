@@ -7,6 +7,11 @@ import (
 	"workplace/internal/user"
 )
 
+var (
+	ErrForbidden    = errors.New("you are not allowed to do that in this room")
+	ErrRoomNotFound = errors.New("room not found")
+)
+
 type Service struct {
 	repo     *Repository
 	userRepo *user.Repository
@@ -16,12 +21,28 @@ func NewService(repo *Repository, userRepo *user.Repository) *Service {
 	return &Service{repo: repo, userRepo: userRepo}
 }
 
-func (s *Service) CreateRoom(ctx context.Context, dto CreateRoomDTO, createdBy, creatorRole string) (*Room, error) {
+func (s *Service) CreateRoom(ctx context.Context, dto CreateRoomDTO, createdBy, creatorRole, creatorDeptID string) (*Room, error) {
 	if dto.Name == "" {
 		return nil, errors.New("room name is required")
 	}
 	if dto.Type == "" {
 		dto.Type = RoomGeneral
+	}
+	switch dto.Type {
+	case RoomGeneral, RoomDepartmental:
+	case RoomProject:
+		if creatorRole != "super_admin" {
+			return nil, errors.New("project rooms are created automatically with their project")
+		}
+	default:
+		return nil, errors.New("invalid room type; use /dm for direct messages")
+	}
+	if creatorRole != "super_admin" {
+		// Only super_admin can attach a room to another department or a project.
+		dto.ProjectID = nil
+		if dto.DepartmentID != nil && *dto.DepartmentID != creatorDeptID {
+			return nil, ErrForbidden
+		}
 	}
 	room := &Room{
 		Name:         dto.Name,
@@ -127,6 +148,9 @@ func (s *Service) AddReaction(ctx context.Context, messageID, userID, emoji stri
 	if emoji == "" {
 		return errors.New("emoji is required")
 	}
+	if err := s.requireMessageAccess(ctx, messageID, userID); err != nil {
+		return err
+	}
 	return s.repo.AddReaction(ctx, messageID, userID, emoji)
 }
 
@@ -134,7 +158,10 @@ func (s *Service) RemoveReaction(ctx context.Context, messageID, userID, emoji s
 	return s.repo.RemoveReaction(ctx, messageID, userID, emoji)
 }
 
-func (s *Service) ListReactions(ctx context.Context, messageID string) ([]*MessageReaction, error) {
+func (s *Service) ListReactions(ctx context.Context, messageID, userID string) ([]*MessageReaction, error) {
+	if err := s.requireMessageAccess(ctx, messageID, userID); err != nil {
+		return nil, err
+	}
 	return s.repo.ListReactions(ctx, messageID)
 }
 
@@ -149,12 +176,53 @@ func (s *Service) DeleteRoom(ctx context.Context, roomID, requestorID, requestor
 	return s.repo.DeleteRoom(ctx, roomID)
 }
 
-func (s *Service) AddMember(ctx context.Context, roomID, userID string) error {
+// canManageMembers: membership of direct and project rooms is managed by the
+// system (DMs are fixed; project rooms follow project assignments), so only
+// super_admin may change them. Other rooms are managed by their creator.
+func canManageMembers(room *Room, callerID, callerRole string) bool {
+	if callerRole == "super_admin" {
+		return room.Type != RoomDirect
+	}
+	if room.Type == RoomDirect || room.Type == RoomProject {
+		return false
+	}
+	return room.CreatedBy == callerID
+}
+
+func (s *Service) AddMember(ctx context.Context, roomID, userID, callerID, callerRole string) error {
+	room, err := s.repo.FindRoomByID(ctx, roomID)
+	if err != nil {
+		return ErrRoomNotFound
+	}
+	if !canManageMembers(room, callerID, callerRole) {
+		return ErrForbidden
+	}
 	return s.repo.AddMember(ctx, roomID, userID)
 }
 
-func (s *Service) RemoveMember(ctx context.Context, roomID, userID string) error {
+// RemoveMember removes userID from a room. Members may always leave a
+// non-direct room themselves.
+func (s *Service) RemoveMember(ctx context.Context, roomID, userID, callerID, callerRole string) error {
+	room, err := s.repo.FindRoomByID(ctx, roomID)
+	if err != nil {
+		return ErrRoomNotFound
+	}
+	leaving := userID == callerID && room.Type != RoomDirect
+	if !leaving && !canManageMembers(room, callerID, callerRole) {
+		return ErrForbidden
+	}
 	return s.repo.RemoveMember(ctx, roomID, userID)
+}
+
+func (s *Service) requireMessageAccess(ctx context.Context, messageID, userID string) error {
+	ok, err := s.repo.IsMessageVisible(ctx, messageID, userID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrForbidden
+	}
+	return nil
 }
 
 func (s *Service) IsMember(ctx context.Context, roomID, userID string) (bool, error) {
