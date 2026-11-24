@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"workplace/internal/chat"
 	"workplace/internal/notification"
@@ -179,18 +180,40 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	return s.repo.Delete(ctx, id)
 }
 
-func (s *Service) Assign(ctx context.Context, projectID, userID string) error {
+// Assign adds a user to a project. When the user is a department head, every
+// active member of their department is added too; the dept head then gives each
+// of them a duty (task). It returns the IDs of everyone newly added.
+func (s *Service) Assign(ctx context.Context, projectID, userID string) ([]string, error) {
+	u, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return nil, errors.New("user not found")
+	}
 	if err := s.repo.Assign(ctx, projectID, userID); err != nil {
-		return err
+		return nil, err
+	}
+	added := []string{userID}
+
+	var deptMembers []*user.User
+	if u.Role == user.RoleDeptHead && u.DepartmentID != nil {
+		members, err := s.userRepo.ListByDepartment(ctx, *u.DepartmentID)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range members {
+			if m.ID == userID || !m.IsActive {
+				continue
+			}
+			if err := s.repo.Assign(ctx, projectID, m.ID); err != nil {
+				return nil, err
+			}
+			deptMembers = append(deptMembers, m)
+			added = append(added, m.ID)
+		}
 	}
 
 	go func() {
 		// The request context is cancelled once the handler returns.
 		ctx := context.Background()
-		u, err := s.userRepo.FindByID(ctx, userID)
-		if err != nil {
-			return
-		}
 		p, err := s.repo.FindByID(ctx, projectID)
 		if err != nil {
 			return
@@ -207,9 +230,23 @@ func (s *Service) Assign(ctx context.Context, projectID, userID string) error {
 			SendEmail: true,
 		})
 		s.chatSvc.SyncProjectMember(ctx, projectID, userID, true)
+
+		for _, m := range deptMembers {
+			s.notifSvc.Notify(ctx, notification.NotifyInput{
+				UserID:    m.ID,
+				Email:     m.Email,
+				Name:      m.Name,
+				Type:      notification.TypeProjectAssigned,
+				Title:     "Added to Project: " + p.Title,
+				Body:      fmt.Sprintf("Your department has been added to the project \"%s\". %s will assign your duties.", p.Title, u.Name),
+				RefID:     &refID,
+				SendEmail: true,
+			})
+			s.chatSvc.SyncProjectMember(ctx, projectID, m.ID, true)
+		}
 	}()
 
-	return nil
+	return added, nil
 }
 
 func (s *Service) Unassign(ctx context.Context, projectID, userID string) error {
@@ -340,4 +377,49 @@ func (s *Service) CanAccess(ctx context.Context, p *Project, userID, role, deptI
 		return true, nil
 	}
 	return s.repo.IsAssigned(ctx, p.ID, userID)
+}
+
+// AddToDepartmentProjects adds a user who has just joined deptID to every active
+// project their department head is on, so late joiners end up in the same place
+// as the staff added when the dept head was assigned. Their dept head then gives
+// them a duty. Errors are logged; they must not block the user update.
+func (s *Service) AddToDepartmentProjects(ctx context.Context, userID, deptID string) {
+	projects, err := s.repo.ProjectsLedByDepartment(ctx, deptID, userID)
+	if err != nil {
+		log.Printf("add %s to department projects: %v", userID, err)
+		return
+	}
+	var added []*Project
+	for _, p := range projects {
+		if err := s.repo.Assign(ctx, p.ID, userID); err != nil {
+			log.Printf("add %s to project %s: %v", userID, p.ID, err)
+			continue
+		}
+		added = append(added, p)
+	}
+	if len(added) == 0 {
+		return
+	}
+
+	go func() {
+		ctx := context.Background() // the request context is cancelled once the handler returns
+		u, err := s.userRepo.FindByID(ctx, userID)
+		if err != nil {
+			return
+		}
+		for _, p := range added {
+			refID := p.ID
+			s.notifSvc.Notify(ctx, notification.NotifyInput{
+				UserID:    u.ID,
+				Email:     u.Email,
+				Name:      u.Name,
+				Type:      notification.TypeProjectAssigned,
+				Title:     "Added to Project: " + p.Title,
+				Body:      fmt.Sprintf("You joined a department working on the project \"%s\". Your department head will assign your duties.", p.Title),
+				RefID:     &refID,
+				SendEmail: true,
+			})
+			s.chatSvc.SyncProjectMember(ctx, p.ID, userID, true)
+		}
+	}()
 }

@@ -73,17 +73,16 @@ func (s *Service) Create(ctx context.Context, dto CreateRequestDTO, userID strin
 	return req, s.repo.Create(ctx, req)
 }
 
-// List returns all requests when seeAll is true, otherwise only the caller's own.
-func (s *Service) List(ctx context.Context, seeAll bool, userID string) ([]*Request, error) {
-	if seeAll {
-		return s.repo.List(ctx, "")
-	}
-	return s.repo.List(ctx, userID)
+// List returns userID's requests when set, otherwise requests of users in deptID
+// when set, otherwise all requests. Callers decide which scope a user may use.
+func (s *Service) List(ctx context.Context, userID, deptID string) ([]*Request, error) {
+	return s.repo.List(ctx, userID, deptID)
 }
 
-func (s *Service) Get(ctx context.Context, id, callerID string, seeAll bool) (*Request, error) {
+// Get returns a request. Access control is the caller's job.
+func (s *Service) Get(ctx context.Context, id string) (*Request, error) {
 	req, err := s.repo.FindByID(ctx, id)
-	if err != nil || (!seeAll && req.UserID != callerID) {
+	if err != nil {
 		return nil, ErrNotFound
 	}
 	return req, nil

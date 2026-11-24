@@ -42,7 +42,13 @@ func writeErr(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	list, err := h.svc.List(r.Context(), middleware.IsManager(r), middleware.GetUserID(r))
+	// Managers see requests in their scope (dept heads: their department; super
+	// admins: everyone). Everyone else sees only their own.
+	userID, deptID := middleware.GetUserID(r), ""
+	if middleware.IsManager(r) {
+		userID, deptID = "", middleware.ScopeDept(r)
+	}
+	list, err := h.svc.List(r.Context(), userID, deptID)
 	if err != nil {
 		response.ServerError(w, r, err)
 		return
@@ -64,16 +70,28 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusCreated, req)
 }
 
+// load returns the request in {id} if the caller may see it, else writes 404.
+func (h *Handler) load(w http.ResponseWriter, r *http.Request) (*Request, bool) {
+	req, err := h.svc.Get(r.Context(), r.PathValue("id"))
+	if err != nil || !middleware.CanAccessUser(r, req.UserID) {
+		writeErr(w, r, ErrNotFound)
+		return nil, false
+	}
+	return req, true
+}
+
 func (h *Handler) getByID(w http.ResponseWriter, r *http.Request) {
-	req, err := h.svc.Get(r.Context(), r.PathValue("id"), middleware.GetUserID(r), middleware.IsManager(r))
-	if err != nil {
-		writeErr(w, r, err)
+	req, ok := h.load(w, r)
+	if !ok {
 		return
 	}
 	response.JSON(w, http.StatusOK, req)
 }
 
 func (h *Handler) approve(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.load(w, r); !ok { // dept heads: own department only
+		return
+	}
 	var dto ReviewDTO
 	_ = json.NewDecoder(r.Body).Decode(&dto) // note is optional
 	if err := h.svc.Approve(r.Context(), r.PathValue("id"), middleware.GetUserID(r), dto); err != nil {
@@ -84,6 +102,9 @@ func (h *Handler) approve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) reject(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.load(w, r); !ok {
+		return
+	}
 	var dto ReviewDTO
 	_ = json.NewDecoder(r.Body).Decode(&dto) // note is optional
 	if err := h.svc.Reject(r.Context(), r.PathValue("id"), middleware.GetUserID(r), dto); err != nil {
@@ -103,8 +124,8 @@ func (h *Handler) cancel(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) balance(w http.ResponseWriter, r *http.Request) {
 	userID := r.PathValue("userID")
-	if userID != middleware.GetUserID(r) && !middleware.IsManager(r) {
-		response.Error(w, http.StatusForbidden, "cannot view another user's leave balance")
+	if !middleware.CanAccessUser(r, userID) {
+		response.Error(w, http.StatusForbidden, "cannot view this user's leave balance")
 		return
 	}
 	year, _ := strconv.Atoi(r.URL.Query().Get("year"))

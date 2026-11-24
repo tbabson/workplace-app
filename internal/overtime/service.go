@@ -75,8 +75,10 @@ func (s *Service) GetByID(ctx context.Context, id string) (*Overtime, error) {
 	return s.repo.FindByID(ctx, id)
 }
 
-func (s *Service) List(ctx context.Context, userID string) ([]*Overtime, error) {
-	return s.repo.List(ctx, userID)
+// List returns userID's records when set, otherwise records of users in deptID
+// when set, otherwise all.
+func (s *Service) List(ctx context.Context, userID, deptID string) ([]*Overtime, error) {
+	return s.repo.List(ctx, userID, deptID)
 }
 
 func (s *Service) Update(ctx context.Context, id string, dto UpdateOvertimeDTO) (*Overtime, error) {

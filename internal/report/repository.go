@@ -427,15 +427,16 @@ func (r *Repository) staffDashboard(ctx context.Context, d *DashboardData, userI
 
 // ── Reports ──────────────────────────────────────────────────────────────────
 
-func (r *Repository) AttendanceReport(ctx context.Context, from, to string) ([]*AttendanceRow, error) {
+func (r *Repository) AttendanceReport(ctx context.Context, from, to, deptID string) ([]*AttendanceRow, error) {
 	q := `SELECT a.id, a.user_id, u.name, a.date::text, a.sign_in_at, a.sign_out_at,
 	             CASE WHEN a.sign_in_at IS NOT NULL AND a.sign_out_at IS NOT NULL
 	                  THEN EXTRACT(EPOCH FROM (a.sign_out_at - a.sign_in_at))/3600
 	                  ELSE 0 END AS hours_worked
 	      FROM attendance a JOIN users u ON u.id = a.user_id
 	      WHERE a.date BETWEEN $1 AND $2
+	        AND ($3 = '' OR u.department_id::text = $3)
 	      ORDER BY a.date DESC, u.name`
-	rows, err := r.db.Query(ctx, q, from, to)
+	rows, err := r.db.Query(ctx, q, from, to, deptID)
 	if err != nil {
 		return nil, err
 	}
@@ -452,7 +453,7 @@ func (r *Repository) AttendanceReport(ctx context.Context, from, to string) ([]*
 	return list, nil
 }
 
-func (r *Repository) OvertimeReport(ctx context.Context, from, to string, _ float64) ([]*OvertimeRow, error) {
+func (r *Repository) OvertimeReport(ctx context.Context, from, to, deptID string) ([]*OvertimeRow, error) {
 	q := `SELECT o.user_id, COALESCE(u.name, '') AS user_name,
 	             (o.start_time AT TIME ZONE APP_TZ)::date::text AS date,
 	             COALESCE(
@@ -465,8 +466,9 @@ func (r *Repository) OvertimeReport(ctx context.Context, from, to string, _ floa
 	      FROM overtime o
 	      LEFT JOIN users u ON u.id = o.user_id
 	      WHERE (o.start_time AT TIME ZONE APP_TZ)::date BETWEEN $1 AND $2
+	        AND ($3 = '' OR u.department_id::text = $3)
 	      ORDER BY o.start_time DESC`
-	rows, err := r.db.Query(ctx, q, from, to)
+	rows, err := r.db.Query(ctx, q, from, to, deptID)
 	if err != nil {
 		return nil, err
 	}

@@ -49,13 +49,13 @@ func (s *Service) Dashboard(ctx context.Context, userID, role, deptID string) (*
 	return d, nil
 }
 
-func (s *Service) AttendanceReport(ctx context.Context, from, to string) ([]*AttendanceRow, error) {
+func (s *Service) AttendanceReport(ctx context.Context, from, to, deptID string) ([]*AttendanceRow, error) {
 	from, to = defaultDateRange(from, to)
-	return s.repo.AttendanceReport(ctx, from, to)
+	return s.repo.AttendanceReport(ctx, from, to, deptID)
 }
 
-func (s *Service) AttendanceCSV(ctx context.Context, from, to string) ([]byte, error) {
-	rows, err := s.AttendanceReport(ctx, from, to)
+func (s *Service) AttendanceCSV(ctx context.Context, from, to, deptID string) ([]byte, error) {
+	rows, err := s.AttendanceReport(ctx, from, to, deptID)
 	if err != nil {
 		return nil, err
 	}
@@ -76,13 +76,13 @@ func (s *Service) AttendanceCSV(ctx context.Context, from, to string) ([]byte, e
 	return buf.Bytes(), w.Error()
 }
 
-func (s *Service) OvertimeReport(ctx context.Context, from, to string) ([]*OvertimeRow, error) {
+func (s *Service) OvertimeReport(ctx context.Context, from, to, deptID string) ([]*OvertimeRow, error) {
 	from, to = defaultDateRange(from, to)
-	return s.repo.OvertimeReport(ctx, from, to, 8.0)
+	return s.repo.OvertimeReport(ctx, from, to, deptID)
 }
 
-func (s *Service) OvertimeCSV(ctx context.Context, from, to string) ([]byte, error) {
-	rows, err := s.OvertimeReport(ctx, from, to)
+func (s *Service) OvertimeCSV(ctx context.Context, from, to, deptID string) ([]byte, error) {
+	rows, err := s.OvertimeReport(ctx, from, to, deptID)
 	if err != nil {
 		return nil, err
 	}

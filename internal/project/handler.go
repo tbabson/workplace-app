@@ -2,6 +2,7 @@ package project
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"workplace/pkg/middleware"
@@ -130,11 +131,20 @@ func (h *Handler) assign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.Assign(r.Context(), r.PathValue("id"), dto.UserID); err != nil {
+	added, err := h.svc.Assign(r.Context(), r.PathValue("id"), dto.UserID)
+	if err != nil {
+		if err.Error() == "user not found" {
+			response.Error(w, http.StatusBadRequest, "user not found")
+			return
+		}
 		response.ServerError(w, r, err)
 		return
 	}
-	response.Message(w, http.StatusOK, "User assigned to project successfully and added to project chat")
+	msg := "User assigned to project successfully and added to project chat"
+	if n := len(added) - 1; n > 0 {
+		msg = fmt.Sprintf("Department head assigned; %d staff from their department were added too and are awaiting duties", n)
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"message": msg, "added_user_ids": added})
 }
 
 func (h *Handler) unassign(w http.ResponseWriter, r *http.Request) {

@@ -91,7 +91,9 @@ func main() {
 	chatSvc := chat.NewService(chatRepo, userRepo)
 	chatHub := chat.NewHub(chatRepo, userRepo, notifSvc)
 	projectSvc := project.NewService(projectRepo, projectHistoryRepo, projectBudgetRepo, projectFileRepo, chatSvc, notifSvc, userRepo)
-	taskSvc := task.NewService(taskRepo, notifSvc, chatSvc)
+	// Staff joining a department later are added to the projects their dept head is on.
+	userSvc.OnDepartmentJoined(projectSvc.AddToDepartmentProjects)
+	taskSvc := task.NewService(taskRepo, notifSvc, chatSvc, projectRepo)
 	milestoneSvc := milestone.NewService(milestoneRepo)
 	commentSvc := projectcomment.NewService(commentRepo, notifSvc, projectRepo)
 	attendanceSvc := attendance.NewService(attendanceRepo, notifSvc, userRepo, cfg.CompanyLat, cfg.CompanyLng, cfg.GeofenceRadius, cfg.DeviceLockEnabled)
@@ -138,6 +140,8 @@ func main() {
 
 	// ── Server ────────────────────────────────────────────────────────────────
 	authMw := middleware.Auth(cfg.JWTSecret, rdb, userSvc.Identity)
+	// Lets handlers check whether a dept head may see a given user's records.
+	middleware.SetUserDepartmentLookup(userSvc.DepartmentOf)
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%s", cfg.Port),
 		Handler:           newRouter(h, authMw, cfg.AllowedOrigins),

@@ -122,8 +122,8 @@ func TestRolePermissions(t *testing.T) {
 		// Projects, tasks, milestones.
 		{"POST", "/api/v1/projects", []string{"staff", "dept_head", "procurement"}, `{}`},
 		{"PUT", "/api/v1/projects/" + someID + "/budget", []string{"staff", "dept_head"}, `{}`},
-		{"POST", "/api/v1/projects/" + someID + "/tasks", []string{"staff", "dept_head", "procurement"}, `{}`},
-		{"DELETE", "/api/v1/tasks/" + someID, []string{"staff", "dept_head", "procurement"}, ""},
+		{"POST", "/api/v1/projects/" + someID + "/tasks", []string{"staff", "procurement"}, `{}`},
+		{"DELETE", "/api/v1/tasks/" + someID, []string{"staff", "procurement"}, ""},
 		{"POST", "/api/v1/projects/" + someID + "/milestones", []string{"staff", "dept_head", "procurement"}, `{}`},
 	}
 

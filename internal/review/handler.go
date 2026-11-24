@@ -23,11 +23,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, prefix string) {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	userID := ""
-	if !middleware.IsManager(r) {
-		userID = middleware.GetUserID(r)
+	userID, deptID := middleware.GetUserID(r), ""
+	if middleware.IsManager(r) {
+		userID, deptID = "", middleware.ScopeDept(r)
 	}
-	list, err := h.svc.List(r.Context(), userID)
+	list, err := h.svc.List(r.Context(), userID, deptID)
 	if err != nil {
 		response.ServerError(w, r, err)
 		return
@@ -45,6 +45,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusForbidden, "you cannot review yourself")
 		return
 	}
+	if !middleware.CanAccessUser(r, dto.UserID) {
+		response.Error(w, http.StatusForbidden, "you can only review staff in your department")
+		return
+	}
 	rv, err := h.svc.Create(r.Context(), dto, middleware.GetUserID(r))
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
@@ -55,7 +59,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) getByID(w http.ResponseWriter, r *http.Request) {
 	rv, err := h.svc.GetByID(r.Context(), r.PathValue("id"))
-	if err != nil || (!middleware.IsManager(r) && rv.UserID != middleware.GetUserID(r)) {
+	if err != nil || !middleware.CanAccessUser(r, rv.UserID) {
 		response.Error(w, http.StatusNotFound, "review not found")
 		return
 	}
@@ -64,7 +68,7 @@ func (h *Handler) getByID(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	existing, err := h.svc.GetByID(r.Context(), r.PathValue("id"))
-	if err != nil {
+	if err != nil || !middleware.CanAccessUser(r, existing.UserID) {
 		response.Error(w, http.StatusNotFound, "review not found")
 		return
 	}
@@ -88,7 +92,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	existing, err := h.svc.GetByID(r.Context(), r.PathValue("id"))
-	if err != nil {
+	if err != nil || !middleware.CanAccessUser(r, existing.UserID) {
 		response.Error(w, http.StatusNotFound, "review not found")
 		return
 	}

@@ -26,9 +26,20 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("DELETE "+prefix+"/{id}", h.delete)
 }
 
-// seeAll: managers review claims and procurement pays them, so they see every claim.
-func seeAll(r *http.Request) bool {
-	return middleware.HasRole(r, middleware.RoleSuperAdmin, middleware.RoleDeptHead, middleware.RoleProcurement)
+// canSee: super_admin and procurement (which pays claims) see every claim;
+// dept heads see their own department's; everyone sees their own.
+func canSee(r *http.Request, c *Claim) bool {
+	return middleware.HasRole(r, middleware.RoleProcurement) || middleware.CanAccessUser(r, c.UserID)
+}
+
+// load returns the claim in {id} if the caller may see it, else writes 404.
+func (h *Handler) load(w http.ResponseWriter, r *http.Request) (*Claim, bool) {
+	c, err := h.svc.Get(r.Context(), r.PathValue("id"))
+	if err != nil || !canSee(r, c) {
+		writeErr(w, r, ErrNotFound)
+		return nil, false
+	}
+	return c, true
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, err error) {
@@ -45,7 +56,14 @@ func writeErr(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	list, err := h.svc.List(r.Context(), seeAll(r), middleware.GetUserID(r))
+	userID, deptID := middleware.GetUserID(r), ""
+	switch {
+	case middleware.HasRole(r, middleware.RoleSuperAdmin, middleware.RoleProcurement):
+		userID = ""
+	case middleware.HasRole(r, middleware.RoleDeptHead):
+		userID, deptID = "", middleware.ScopeDept(r)
+	}
+	list, err := h.svc.List(r.Context(), userID, deptID)
 	if err != nil {
 		response.ServerError(w, r, err)
 		return
@@ -68,15 +86,17 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getByID(w http.ResponseWriter, r *http.Request) {
-	c, err := h.svc.Get(r.Context(), r.PathValue("id"), middleware.GetUserID(r), seeAll(r))
-	if err != nil {
-		writeErr(w, r, err)
+	c, ok := h.load(w, r)
+	if !ok {
 		return
 	}
 	response.JSON(w, http.StatusOK, c)
 }
 
 func (h *Handler) approve(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.load(w, r); !ok {
+		return
+	}
 	c, err := h.svc.Approve(r.Context(), r.PathValue("id"), middleware.GetUserID(r))
 	if err != nil {
 		writeErr(w, r, err)
@@ -86,6 +106,9 @@ func (h *Handler) approve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) reject(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.load(w, r); !ok {
+		return
+	}
 	c, err := h.svc.Reject(r.Context(), r.PathValue("id"), middleware.GetUserID(r))
 	if err != nil {
 		writeErr(w, r, err)
@@ -95,6 +118,9 @@ func (h *Handler) reject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) markPaid(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.load(w, r); !ok {
+		return
+	}
 	c, err := h.svc.MarkPaid(r.Context(), r.PathValue("id"), middleware.GetUserID(r))
 	if err != nil {
 		writeErr(w, r, err)

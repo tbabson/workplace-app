@@ -9,14 +9,26 @@ import (
 	"workplace/internal/notification"
 )
 
+// ProjectMembership reports whether a user is assigned to a project.
+// project.Repository implements it.
+type ProjectMembership interface {
+	IsAssigned(ctx context.Context, projectID, userID string) (bool, error)
+}
+
 type Service struct {
 	repo     *Repository
 	notifSvc *notification.Service
 	chatSvc  *chat.Service
+	projects ProjectMembership
 }
 
-func NewService(repo *Repository, notifSvc *notification.Service, chatSvc *chat.Service) *Service {
-	return &Service{repo: repo, notifSvc: notifSvc, chatSvc: chatSvc}
+func NewService(repo *Repository, notifSvc *notification.Service, chatSvc *chat.Service, projects ProjectMembership) *Service {
+	return &Service{repo: repo, notifSvc: notifSvc, chatSvc: chatSvc, projects: projects}
+}
+
+// IsProjectMember reports whether userID is assigned to projectID.
+func (s *Service) IsProjectMember(ctx context.Context, projectID, userID string) (bool, error) {
+	return s.projects.IsAssigned(ctx, projectID, userID)
 }
 
 func (s *Service) Create(ctx context.Context, projectID string, dto CreateTaskDTO, createdBy string) (*Task, error) {

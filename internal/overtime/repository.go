@@ -71,13 +71,18 @@ func (r *Repository) FindByID(ctx context.Context, id string) (*Overtime, error)
 	))
 }
 
-func (r *Repository) List(ctx context.Context, userID string) ([]*Overtime, error) {
+// List returns userID's records when userID is set, otherwise records of users in
+// deptID when deptID is set, otherwise everything.
+func (r *Repository) List(ctx context.Context, userID, deptID string) ([]*Overtime, error) {
 	base := `SELECT ` + listCols + ` FROM overtime o LEFT JOIN users u ON u.id = o.user_id`
 	var q string
 	var args []interface{}
 	if userID != "" {
 		q = base + ` WHERE o.user_id = $1 ORDER BY o.created_at DESC`
 		args = append(args, userID)
+	} else if deptID != "" {
+		q = base + ` WHERE u.department_id = $1 ORDER BY o.created_at DESC`
+		args = append(args, deptID)
 	} else {
 		q = base + ` ORDER BY o.created_at DESC`
 	}

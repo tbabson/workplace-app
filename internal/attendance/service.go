@@ -158,8 +158,14 @@ func (s *Service) UserHistory(ctx context.Context, userID string) ([]*Attendance
 	return s.repo.ListByUser(ctx, userID)
 }
 
-func (s *Service) AllHistory(ctx context.Context) ([]*Attendance, error) {
-	return s.repo.ListAll(ctx)
+// AllHistory returns every record, or only those of users in deptID when set.
+func (s *Service) AllHistory(ctx context.Context, deptID string) ([]*Attendance, error) {
+	return s.repo.ListAll(ctx, deptID)
+}
+
+// Get returns one attendance record.
+func (s *Service) Get(ctx context.Context, id string) (*Attendance, error) {
+	return s.repo.FindByID(ctx, id)
 }
 
 // AdminSignOut lets a super_admin or dept_head manually close an open attendance record.

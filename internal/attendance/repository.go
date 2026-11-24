@@ -112,10 +112,17 @@ func (r *Repository) ListByUser(ctx context.Context, userID string) ([]*Attendan
 	return list, nil
 }
 
-func (r *Repository) ListAll(ctx context.Context) ([]*Attendance, error) {
-	rows, err := r.db.Query(ctx,
-		`SELECT `+cols+` FROM attendance ORDER BY date DESC, created_at DESC`,
-	)
+// ListAll returns every attendance record, or only those of users in deptID when set.
+func (r *Repository) ListAll(ctx context.Context, deptID string) ([]*Attendance, error) {
+	q := `SELECT ` + cols + ` FROM attendance ORDER BY date DESC, created_at DESC`
+	var args []any
+	if deptID != "" {
+		q = `SELECT ` + cols + ` FROM attendance
+		      WHERE user_id IN (SELECT id FROM users WHERE department_id = $1)
+		      ORDER BY date DESC, created_at DESC`
+		args = []any{deptID}
+	}
+	rows, err := r.db.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -165,4 +172,10 @@ func (r *Repository) AdminSignOut(ctx context.Context, id string, signOutAt time
 	      WHERE id = $2 AND sign_in_at IS NOT NULL AND sign_out_at IS NULL
 	      RETURNING ` + cols
 	return a, scan(a, r.db.QueryRow(ctx, q, signOutAt, id))
+}
+
+// FindByID returns one attendance record.
+func (r *Repository) FindByID(ctx context.Context, id string) (*Attendance, error) {
+	a := &Attendance{}
+	return a, scan(a, r.db.QueryRow(ctx, `SELECT `+cols+` FROM attendance WHERE id = $1`, id))
 }

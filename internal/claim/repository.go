@@ -34,12 +34,17 @@ func (r *Repository) FindByID(ctx context.Context, id string) (*Claim, error) {
 	return scan(r.db.QueryRow(ctx, `SELECT `+cols+` FROM expense_claims WHERE id=$1`, id))
 }
 
-func (r *Repository) List(ctx context.Context, userID string) ([]*Claim, error) {
+// List returns userID's records when userID is set, otherwise records of users in
+// deptID when deptID is set, otherwise everything.
+func (r *Repository) List(ctx context.Context, userID, deptID string) ([]*Claim, error) {
 	var q string
 	var args []any
 	if userID != "" {
 		q = `SELECT ` + cols + ` FROM expense_claims WHERE user_id=$1 ORDER BY created_at DESC`
 		args = []any{userID}
+	} else if deptID != "" {
+		q = `SELECT ` + cols + ` FROM expense_claims WHERE user_id IN (SELECT id FROM users WHERE department_id=$1) ORDER BY created_at DESC`
+		args = []any{deptID}
 	} else {
 		q = `SELECT ` + cols + ` FROM expense_claims ORDER BY created_at DESC`
 	}

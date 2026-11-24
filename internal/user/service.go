@@ -24,6 +24,23 @@ func userKey(id string) string { return fmt.Sprintf("user:id:%s", id) }
 type Service struct {
 	repo  *Repository
 	cache *cache.Cache
+
+	// onDepartmentJoined runs when an active user is created in, moved into, or
+	// reactivated in a department. See OnDepartmentJoined.
+	onDepartmentJoined func(ctx context.Context, userID, deptID string)
+}
+
+// OnDepartmentJoined registers a callback for users joining a department (used
+// to add them to their department's projects). The project package can't be
+// imported here without a cycle, so main wires it up.
+func (s *Service) OnDepartmentJoined(fn func(ctx context.Context, userID, deptID string)) {
+	s.onDepartmentJoined = fn
+}
+
+func (s *Service) departmentJoined(ctx context.Context, u *User) {
+	if s.onDepartmentJoined != nil && u.IsActive && u.DepartmentID != nil && *u.DepartmentID != "" {
+		s.onDepartmentJoined(ctx, u.ID, *u.DepartmentID)
+	}
 }
 
 func NewService(repo *Repository, c *cache.Cache) *Service {
@@ -80,6 +97,7 @@ func (s *Service) Create(ctx context.Context, dto CreateUserDTO) (*User, error) 
 		}
 		return nil, err
 	}
+	s.departmentJoined(ctx, u)
 	return u, nil
 }
 
@@ -140,6 +158,11 @@ func (s *Service) Update(ctx context.Context, id string, dto UpdateUserDTO) (*Us
 		}
 		dto.Email = &e
 	}
+	// Remember the previous department and status to detect someone joining a department.
+	before, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	u, err := s.repo.Update(ctx, id, dto)
 	if err != nil {
 		if strings.Contains(err.Error(), "23505") {
@@ -148,7 +171,17 @@ func (s *Service) Update(ctx context.Context, id string, dto UpdateUserDTO) (*Us
 		return nil, err
 	}
 	cache.Delete(ctx, s.cache, userKey(id))
+	if deptOf(before) != deptOf(u) || (!before.IsActive && u.IsActive) {
+		s.departmentJoined(ctx, u)
+	}
 	return u, nil
+}
+
+func deptOf(u *User) string {
+	if u.DepartmentID == nil {
+		return ""
+	}
+	return *u.DepartmentID
 }
 
 // UpdateMe applies the profile fields any user may change on their own account.
@@ -204,4 +237,17 @@ func (s *Service) EnsureSuperAdmin(ctx context.Context, email, password string) 
 		log.Println("created bootstrap super_admin account")
 	}
 	return err
+}
+
+// DepartmentOf returns a user's department ID ("" if none). It implements
+// middleware.UserDepartmentLookup.
+func (s *Service) DepartmentOf(ctx context.Context, id string) (string, error) {
+	u, err := s.GetByID(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if u.DepartmentID == nil {
+		return "", nil
+	}
+	return *u.DepartmentID, nil
 }

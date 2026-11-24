@@ -59,6 +59,13 @@ func (h *Handler) adminSignOut(w http.ResponseWriter, r *http.Request) {
 	// ignore decode error — body is optional
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
+	// Dept heads may only close records of staff in their own department.
+	rec, err := h.svc.Get(r.Context(), r.PathValue("id"))
+	if err != nil || !middleware.CanAccessUser(r, rec.UserID) {
+		response.Error(w, http.StatusNotFound, "attendance record not found")
+		return
+	}
+
 	a, err := h.svc.AdminSignOut(r.Context(), r.PathValue("id"), body.SignOutAt)
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
@@ -77,7 +84,12 @@ func (h *Handler) myHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) userHistory(w http.ResponseWriter, r *http.Request) {
-	list, err := h.svc.UserHistory(r.Context(), r.PathValue("userID"))
+	userID := r.PathValue("userID")
+	if !middleware.CanAccessUser(r, userID) {
+		response.Error(w, http.StatusForbidden, "you can only view attendance of staff in your department")
+		return
+	}
+	list, err := h.svc.UserHistory(r.Context(), userID)
 	if err != nil {
 		response.ServerError(w, r, err)
 		return
@@ -86,7 +98,8 @@ func (h *Handler) userHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) allHistory(w http.ResponseWriter, r *http.Request) {
-	list, err := h.svc.AllHistory(r.Context())
+	// Dept heads see only their own department's attendance.
+	list, err := h.svc.AllHistory(r.Context(), middleware.ScopeDept(r))
 	if err != nil {
 		response.ServerError(w, r, err)
 		return

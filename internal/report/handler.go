@@ -37,7 +37,7 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) attendance(w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
-	rows, err := h.svc.AttendanceReport(r.Context(), from, to)
+	rows, err := h.svc.AttendanceReport(r.Context(), from, to, middleware.ScopeDept(r))
 	if err != nil {
 		response.ServerError(w, r, err)
 		return
@@ -48,7 +48,7 @@ func (h *Handler) attendance(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) attendanceCSV(w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
-	data, err := h.svc.AttendanceCSV(r.Context(), from, to)
+	data, err := h.svc.AttendanceCSV(r.Context(), from, to, middleware.ScopeDept(r))
 	if err != nil {
 		response.ServerError(w, r, err)
 		return
@@ -62,7 +62,7 @@ func (h *Handler) attendanceCSV(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) overtime(w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
-	rows, err := h.svc.OvertimeReport(r.Context(), from, to)
+	rows, err := h.svc.OvertimeReport(r.Context(), from, to, middleware.ScopeDept(r))
 	if err != nil {
 		response.ServerError(w, r, err)
 		return
@@ -73,7 +73,7 @@ func (h *Handler) overtime(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) overtimeCSV(w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
-	data, err := h.svc.OvertimeCSV(r.Context(), from, to)
+	data, err := h.svc.OvertimeCSV(r.Context(), from, to, middleware.ScopeDept(r))
 	if err != nil {
 		response.ServerError(w, r, err)
 		return

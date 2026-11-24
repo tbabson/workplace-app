@@ -198,3 +198,30 @@ func (r *Repository) IsAssigned(ctx context.Context, projectID, userID string) (
 		projectID, userID).Scan(&ok)
 	return ok, err
 }
+
+// ProjectsLedByDepartment returns the active projects (not completed or
+// cancelled) that a dept_head of deptID is assigned to, excluding exceptUserID.
+func (r *Repository) ProjectsLedByDepartment(ctx context.Context, deptID, exceptUserID string) ([]*Project, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT `+selectCols+` FROM projects
+		 WHERE status NOT IN ('completed', 'cancelled')
+		   AND id IN (
+		     SELECT pa.project_id FROM project_assignments pa
+		     JOIN users u ON u.id = pa.user_id
+		     WHERE u.role = 'dept_head' AND u.department_id::text = $1 AND u.id::text <> $2)
+		 ORDER BY created_at DESC`, deptID, exceptUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []*Project
+	for rows.Next() {
+		p := &Project{}
+		if err := rows.Scan(&p.ID, &p.Title, &p.Description, &p.Status, &p.Progress,
+			&p.StartDate, &p.EndDate, &p.DepartmentID, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, p)
+	}
+	return list, rows.Err()
+}
