@@ -84,8 +84,8 @@ func (s *Service) GetByID(ctx context.Context, id string) (*Project, error) {
 	return s.repo.FindByID(ctx, id)
 }
 
-func (s *Service) List(ctx context.Context, deptID, scopeUserID string) ([]*Project, error) {
-	return s.repo.List(ctx, deptID, scopeUserID)
+func (s *Service) List(ctx context.Context, deptID, scopeUserID string, withSubDepts bool) ([]*Project, error) {
+	return s.repo.List(ctx, deptID, scopeUserID, withSubDepts)
 }
 
 func (s *Service) Update(ctx context.Context, id, changedBy string, dto UpdateProjectDTO) (*Project, error) {
@@ -181,7 +181,7 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 }
 
 // Assign adds a user to a project. When the user is a department head, every
-// active member of their department is added too; the dept head then gives each
+// active member of their department and its sub-departments is added too; the dept head then gives each
 // of them a duty (task). It returns the IDs of everyone newly added.
 func (s *Service) Assign(ctx context.Context, projectID, userID string) ([]string, error) {
 	u, err := s.userRepo.FindByID(ctx, userID)
@@ -195,7 +195,7 @@ func (s *Service) Assign(ctx context.Context, projectID, userID string) ([]strin
 
 	var deptMembers []*user.User
 	if u.Role == user.RoleDeptHead && u.DepartmentID != nil {
-		members, err := s.userRepo.ListByDepartment(ctx, *u.DepartmentID)
+		members, err := s.userRepo.ListInDepartmentTree(ctx, *u.DepartmentID)
 		if err != nil {
 			return nil, err
 		}
@@ -373,10 +373,94 @@ func (s *Service) CanAccess(ctx context.Context, p *Project, userID, role, deptI
 	if role == "super_admin" || role == "procurement" {
 		return true, nil
 	}
-	if deptID != "" && p.DepartmentID != nil && *p.DepartmentID == deptID {
-		return true, nil
+	if deptID != "" && p.DepartmentID != nil {
+		if *p.DepartmentID == deptID {
+			return true, nil
+		}
+		// Dept heads also oversee their sub-departments' projects.
+		if role == "dept_head" {
+			parent, err := s.repo.ParentDepartment(ctx, *p.DepartmentID)
+			if err != nil {
+				return false, err
+			}
+			if parent == deptID {
+				return true, nil
+			}
+		}
 	}
 	return s.repo.IsAssigned(ctx, p.ID, userID)
+}
+
+// HandleDepartmentChange keeps a user's project memberships in step with their
+// department: leaving fromDept removes them from the projects its dept head is
+// on (unless their new department's head is on the same project), and joining
+// toDept adds them to the projects that department's head is on.
+func (s *Service) HandleDepartmentChange(ctx context.Context, userID, fromDept, toDept string) {
+	if fromDept != "" {
+		s.removeFromDepartmentProjects(ctx, userID, fromDept, toDept)
+	}
+	if toDept != "" {
+		s.AddToDepartmentProjects(ctx, userID, toDept)
+	}
+}
+
+// removeFromDepartmentProjects takes a user who has left fromDept off its
+// projects, keeping any that toDept's head is also on. Their unfinished tasks on
+// those projects are unassigned so the dept head can hand them to someone else.
+func (s *Service) removeFromDepartmentProjects(ctx context.Context, userID, fromDept, toDept string) {
+	leaving, err := s.repo.ProjectsLedByDepartment(ctx, fromDept, userID)
+	if err != nil {
+		log.Printf("remove %s from department projects: %v", userID, err)
+		return
+	}
+	keep := map[string]bool{}
+	if toDept != "" {
+		staying, err := s.repo.ProjectsLedByDepartment(ctx, toDept, userID)
+		if err != nil {
+			log.Printf("remove %s from department projects: %v", userID, err)
+			return
+		}
+		for _, p := range staying {
+			keep[p.ID] = true
+		}
+	}
+
+	var removed []*Project
+	for _, p := range leaving {
+		if keep[p.ID] {
+			continue
+		}
+		if err := s.repo.UnassignOpenTasks(ctx, p.ID, userID); err != nil {
+			log.Printf("unassign tasks of %s in project %s: %v", userID, p.ID, err)
+		}
+		if err := s.repo.Unassign(ctx, p.ID, userID); err != nil {
+			log.Printf("remove %s from project %s: %v", userID, p.ID, err)
+			continue
+		}
+		removed = append(removed, p)
+	}
+	if len(removed) == 0 {
+		return
+	}
+
+	go func() {
+		ctx := context.Background() // the request context is cancelled once the handler returns
+		u, err := s.userRepo.FindByID(ctx, userID)
+		if err != nil {
+			return
+		}
+		for _, p := range removed {
+			refID := p.ID
+			s.notifSvc.Notify(ctx, notification.NotifyInput{
+				UserID: u.ID,
+				Type:   notification.TypeProjectUnassigned,
+				Title:  "Removed from Project: " + p.Title,
+				Body:   fmt.Sprintf("You were removed from the project \"%s\" because you are no longer in its department.", p.Title),
+				RefID:  &refID,
+			})
+			s.chatSvc.SyncProjectMember(ctx, p.ID, userID, false)
+		}
+	}()
 }
 
 // AddToDepartmentProjects adds a user who has just joined deptID to every active

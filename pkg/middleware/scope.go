@@ -23,8 +23,9 @@ func ScopeDept(r *http.Request) string {
 	return noDepartment
 }
 
-// UserDepartmentLookup returns a user's department ID ("" if none).
-type UserDepartmentLookup func(ctx context.Context, userID string) (string, error)
+// UserDepartmentLookup returns a user's department ID and that department's
+// parent ID ("" when either is absent).
+type UserDepartmentLookup func(ctx context.Context, userID string) (deptID, parentDeptID string, err error)
 
 var userDept atomic.Pointer[UserDepartmentLookup]
 
@@ -35,7 +36,8 @@ func SetUserDepartmentLookup(fn UserDepartmentLookup) { userDept.Store(&fn) }
 // records (attendance, leave, claims, overtime, reviews):
 //   - everyone may see their own;
 //   - super_admin may see everyone's;
-//   - dept_head may see staff in their own department only;
+//   - dept_head may see staff in their own department and its sub-departments
+//     (e.g. the Admin head oversees HR);
 //   - everyone else (staff, procurement) may see only their own.
 //
 // Procurement's finance access (claims, overtime) is granted separately where it applies.
@@ -52,8 +54,8 @@ func CanAccessUser(r *http.Request, targetUserID string) bool {
 		if myDept == "" || lookup == nil {
 			return false
 		}
-		dept, err := (*lookup)(r.Context(), targetUserID)
-		return err == nil && dept == myDept
+		dept, parent, err := (*lookup)(r.Context(), targetUserID)
+		return err == nil && (dept == myDept || parent == myDept)
 	default:
 		return false
 	}

@@ -81,7 +81,7 @@ func (r *Repository) List(ctx context.Context, userID, deptID string) ([]*Overti
 		q = base + ` WHERE o.user_id = $1 ORDER BY o.created_at DESC`
 		args = append(args, userID)
 	} else if deptID != "" {
-		q = base + ` WHERE u.department_id = $1 ORDER BY o.created_at DESC`
+		q = base + ` WHERE u.department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1) ORDER BY o.created_at DESC`
 		args = append(args, deptID)
 	} else {
 		q = base + ` ORDER BY o.created_at DESC`

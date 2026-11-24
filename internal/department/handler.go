@@ -2,7 +2,9 @@ package department
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 
 	"workplace/pkg/middleware"
 	"workplace/pkg/response"
@@ -44,7 +46,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 	d, err := h.svc.Create(r.Context(), dto)
 	if err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error())
+		writeErr(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusCreated, d)
@@ -68,7 +70,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 
 	d, err := h.svc.Update(r.Context(), r.PathValue("id"), dto)
 	if err != nil {
-		response.ServerError(w, r, err)
+		writeErr(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, d)
@@ -80,4 +82,15 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.Message(w, http.StatusOK, "Department deleted successfully")
+}
+
+func writeErr(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, ErrValidation):
+		response.Error(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), ErrValidation.Error()+": "))
+	case response.NotFound(err):
+		response.Error(w, http.StatusNotFound, "department not found")
+	default:
+		response.ServerError(w, r, err)
+	}
 }

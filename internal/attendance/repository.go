@@ -118,7 +118,7 @@ func (r *Repository) ListAll(ctx context.Context, deptID string) ([]*Attendance,
 	var args []any
 	if deptID != "" {
 		q = `SELECT ` + cols + ` FROM attendance
-		      WHERE user_id IN (SELECT id FROM users WHERE department_id = $1)
+		      WHERE user_id IN (SELECT id FROM users WHERE department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1))
 		      ORDER BY date DESC, created_at DESC`
 		args = []any{deptID}
 	}

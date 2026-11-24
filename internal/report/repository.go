@@ -260,10 +260,10 @@ func (r *Repository) deptHeadDashboard(ctx context.Context, d *DashboardData, de
 		q    string
 		dest *int
 	}{
-		{`SELECT COUNT(*) FROM users WHERE department_id=$1`, &d.DeptMembers},
-		{`SELECT COUNT(*) FROM projects WHERE department_id=$1 AND status NOT IN ('completed','cancelled')`, &d.DeptActiveProjects},
-		{`SELECT COUNT(*) FROM attendance a JOIN users u ON u.id=a.user_id WHERE a.date=CURRENT_DATE AND a.sign_in_at IS NOT NULL AND u.department_id=$1`, &d.DeptSignedInToday},
-		{`SELECT COUNT(*) FROM leave_requests lr JOIN users u ON u.id=lr.user_id WHERE lr.status='pending' AND u.department_id=$1`, &d.DeptPendingLeaves},
+		{`SELECT COUNT(*) FROM users WHERE department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1)`, &d.DeptMembers},
+		{`SELECT COUNT(*) FROM projects WHERE department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1) AND status NOT IN ('completed','cancelled')`, &d.DeptActiveProjects},
+		{`SELECT COUNT(*) FROM attendance a JOIN users u ON u.id=a.user_id WHERE a.date=CURRENT_DATE AND a.sign_in_at IS NOT NULL AND u.department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1)`, &d.DeptSignedInToday},
+		{`SELECT COUNT(*) FROM leave_requests lr JOIN users u ON u.id=lr.user_id WHERE lr.status='pending' AND u.department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1)`, &d.DeptPendingLeaves},
 	} {
 		if err := r.db.QueryRow(ctx, c.q, deptID).Scan(c.dest); err != nil {
 			return nil, err
@@ -272,7 +272,7 @@ func (r *Repository) deptHeadDashboard(ctx context.Context, d *DashboardData, de
 
 	// Dept projects by status
 	rows, err := r.db.Query(ctx,
-		`SELECT status::text, COUNT(*)::int FROM projects WHERE department_id=$1 GROUP BY status ORDER BY status`, deptID)
+		`SELECT status::text, COUNT(*)::int FROM projects WHERE department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1) GROUP BY status ORDER BY status`, deptID)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +291,7 @@ func (r *Repository) deptHeadDashboard(ctx context.Context, d *DashboardData, de
 		SELECT to_char(gs.day::date, 'Dy'), COUNT(a.user_id)::int
 		FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, INTERVAL '1 day') gs(day)
 		LEFT JOIN attendance a ON a.date = gs.day::date AND a.sign_in_at IS NOT NULL
-		    AND a.user_id IN (SELECT id FROM users WHERE department_id=$1)
+		    AND a.user_id IN (SELECT id FROM users WHERE department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1))
 		GROUP BY gs.day ORDER BY gs.day`, deptID)
 	if err != nil {
 		return nil, err
@@ -311,7 +311,7 @@ func (r *Repository) deptHeadDashboard(ctx context.Context, d *DashboardData, de
 		SELECT u.name, COALESCE(u.position,''), COALESCE(u.department_name,''),
 		       to_char(a.sign_in_at AT TIME ZONE APP_TZ, 'HH12:MI AM'), a.sign_out_at IS NOT NULL
 		FROM attendance a JOIN users u ON u.id = a.user_id
-		WHERE a.date = CURRENT_DATE AND a.sign_in_at IS NOT NULL AND u.department_id=$1
+		WHERE a.date = CURRENT_DATE AND a.sign_in_at IS NOT NULL AND u.department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1)
 		ORDER BY a.sign_in_at`, deptID)
 	if err != nil {
 		return nil, err
@@ -332,7 +332,7 @@ func (r *Repository) deptHeadDashboard(ctx context.Context, d *DashboardData, de
 		FROM generate_series(CURRENT_DATE - INTERVAL '27 days', CURRENT_DATE, INTERVAL '7 days') gs(week)
 		LEFT JOIN attendance a ON a.date >= gs.week::date AND a.date < (gs.week + INTERVAL '7 days')::date
 		    AND a.sign_in_at IS NOT NULL
-		    AND a.user_id IN (SELECT id FROM users WHERE department_id=$1)
+		    AND a.user_id IN (SELECT id FROM users WHERE department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1))
 		GROUP BY gs.week ORDER BY gs.week`, deptID)
 	if err != nil {
 		return nil, err
@@ -350,7 +350,7 @@ func (r *Repository) deptHeadDashboard(ctx context.Context, d *DashboardData, de
 	// Dept project progress
 	rows, err = r.db.Query(ctx, `
 		SELECT title, progress, status::text FROM projects
-		WHERE department_id=$1 AND status NOT IN ('completed','cancelled')
+		WHERE department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1) AND status NOT IN ('completed','cancelled')
 		ORDER BY progress DESC LIMIT 8`, deptID)
 	if err != nil {
 		return nil, err
@@ -434,7 +434,7 @@ func (r *Repository) AttendanceReport(ctx context.Context, from, to, deptID stri
 	                  ELSE 0 END AS hours_worked
 	      FROM attendance a JOIN users u ON u.id = a.user_id
 	      WHERE a.date BETWEEN $1 AND $2
-	        AND ($3 = '' OR u.department_id::text = $3)
+	        AND ($3 = '' OR u.department_id IN (SELECT id FROM departments WHERE id::text = $3 OR parent_id::text = $3))
 	      ORDER BY a.date DESC, u.name`
 	rows, err := r.db.Query(ctx, q, from, to, deptID)
 	if err != nil {
@@ -466,7 +466,7 @@ func (r *Repository) OvertimeReport(ctx context.Context, from, to, deptID string
 	      FROM overtime o
 	      LEFT JOIN users u ON u.id = o.user_id
 	      WHERE (o.start_time AT TIME ZONE APP_TZ)::date BETWEEN $1 AND $2
-	        AND ($3 = '' OR u.department_id::text = $3)
+	        AND ($3 = '' OR u.department_id IN (SELECT id FROM departments WHERE id::text = $3 OR parent_id::text = $3))
 	      ORDER BY o.start_time DESC`
 	rows, err := r.db.Query(ctx, q, from, to, deptID)
 	if err != nil {

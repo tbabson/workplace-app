@@ -43,7 +43,7 @@ func (r *Repository) List(ctx context.Context, userID, deptID string) ([]*Claim,
 		q = `SELECT ` + cols + ` FROM expense_claims WHERE user_id=$1 ORDER BY created_at DESC`
 		args = []any{userID}
 	} else if deptID != "" {
-		q = `SELECT ` + cols + ` FROM expense_claims WHERE user_id IN (SELECT id FROM users WHERE department_id=$1) ORDER BY created_at DESC`
+		q = `SELECT ` + cols + ` FROM expense_claims WHERE user_id IN (SELECT id FROM users WHERE department_id IN (SELECT id FROM departments WHERE id = $1 OR parent_id = $1)) ORDER BY created_at DESC`
 		args = []any{deptID}
 	} else {
 		q = `SELECT ` + cols + ` FROM expense_claims ORDER BY created_at DESC`

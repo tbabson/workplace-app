@@ -91,8 +91,8 @@ func main() {
 	chatSvc := chat.NewService(chatRepo, userRepo)
 	chatHub := chat.NewHub(chatRepo, userRepo, notifSvc)
 	projectSvc := project.NewService(projectRepo, projectHistoryRepo, projectBudgetRepo, projectFileRepo, chatSvc, notifSvc, userRepo)
-	// Staff joining a department later are added to the projects their dept head is on.
-	userSvc.OnDepartmentJoined(projectSvc.AddToDepartmentProjects)
+	// Keep staff on their department's projects as they join, leave or move departments.
+	userSvc.OnDepartmentChanged(projectSvc.HandleDepartmentChange)
 	taskSvc := task.NewService(taskRepo, notifSvc, chatSvc, projectRepo)
 	milestoneSvc := milestone.NewService(milestoneRepo)
 	commentSvc := projectcomment.NewService(commentRepo, notifSvc, projectRepo)
@@ -141,7 +141,17 @@ func main() {
 	// ── Server ────────────────────────────────────────────────────────────────
 	authMw := middleware.Auth(cfg.JWTSecret, rdb, userSvc.Identity)
 	// Lets handlers check whether a dept head may see a given user's records.
-	middleware.SetUserDepartmentLookup(userSvc.DepartmentOf)
+	middleware.SetUserDepartmentLookup(func(ctx context.Context, userID string) (string, string, error) {
+		dept, err := userSvc.DepartmentOf(ctx, userID)
+		if err != nil || dept == "" {
+			return dept, "", err
+		}
+		d, err := deptSvc.GetByID(ctx, dept) // cached
+		if err != nil || d.ParentID == nil {
+			return dept, "", err
+		}
+		return dept, *d.ParentID, nil
+	})
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%s", cfg.Port),
 		Handler:           newRouter(h, authMw, cfg.AllowedOrigins),

@@ -53,8 +53,9 @@ func (r *Repository) FindByID(ctx context.Context, id string) (*Project, error) 
 }
 
 // List returns every project when scopeUserID is empty. Otherwise it returns the
-// projects in deptID plus any project scopeUserID is assigned to.
-func (r *Repository) List(ctx context.Context, deptID, scopeUserID string) ([]*Project, error) {
+// projects in deptID (and its sub-departments when withSubDepts is set) plus any
+// project scopeUserID is assigned to.
+func (r *Repository) List(ctx context.Context, deptID, scopeUserID string, withSubDepts bool) ([]*Project, error) {
 	var (
 		rows pgx.Rows
 		err  error
@@ -62,9 +63,10 @@ func (r *Repository) List(ctx context.Context, deptID, scopeUserID string) ([]*P
 	if scopeUserID != "" {
 		rows, err = r.db.Query(ctx,
 			`SELECT `+selectCols+` FROM projects
-			 WHERE ($1 <> '' AND department_id::text = $1)
+			 WHERE ($1 <> '' AND department_id IN (
+			         SELECT id FROM departments WHERE id::text = $1 OR ($3 AND parent_id::text = $1)))
 			    OR id IN (SELECT project_id FROM project_assignments WHERE user_id = $2)
-			 ORDER BY created_at DESC`, deptID, scopeUserID)
+			 ORDER BY created_at DESC`, deptID, scopeUserID, withSubDepts)
 	} else {
 		rows, err = r.db.Query(ctx,
 			`SELECT `+selectCols+` FROM projects ORDER BY created_at DESC`)
@@ -200,7 +202,8 @@ func (r *Repository) IsAssigned(ctx context.Context, projectID, userID string) (
 }
 
 // ProjectsLedByDepartment returns the active projects (not completed or
-// cancelled) that a dept_head of deptID is assigned to, excluding exceptUserID.
+// cancelled) that a dept_head overseeing deptID is assigned to: the head of
+// deptID itself or of its parent department. exceptUserID is ignored as a head.
 func (r *Repository) ProjectsLedByDepartment(ctx context.Context, deptID, exceptUserID string) ([]*Project, error) {
 	rows, err := r.db.Query(ctx,
 		`SELECT `+selectCols+` FROM projects
@@ -208,7 +211,11 @@ func (r *Repository) ProjectsLedByDepartment(ctx context.Context, deptID, except
 		   AND id IN (
 		     SELECT pa.project_id FROM project_assignments pa
 		     JOIN users u ON u.id = pa.user_id
-		     WHERE u.role = 'dept_head' AND u.department_id::text = $1 AND u.id::text <> $2)
+		     WHERE u.role = 'dept_head' AND u.id::text <> $2
+		       AND u.department_id IN (
+		         SELECT id FROM departments WHERE id::text = $1
+		         UNION
+		         SELECT parent_id FROM departments WHERE id::text = $1 AND parent_id IS NOT NULL))
 		 ORDER BY created_at DESC`, deptID, exceptUserID)
 	if err != nil {
 		return nil, err
@@ -224,4 +231,24 @@ func (r *Repository) ProjectsLedByDepartment(ctx context.Context, deptID, except
 		list = append(list, p)
 	}
 	return list, rows.Err()
+}
+
+// UnassignOpenTasks clears userID from their unfinished tasks in projectID so the
+// duties can be reassigned. Finished tasks keep their assignee as a record.
+func (r *Repository) UnassignOpenTasks(ctx context.Context, projectID, userID string) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE project_tasks SET assigned_to = NULL, updated_at = $3
+		 WHERE project_id = $1 AND assigned_to = $2 AND status <> 'done'`,
+		projectID, userID, time.Now())
+	return err
+}
+
+// ParentDepartment returns deptID's parent department ID, or "" if it is top-level.
+func (r *Repository) ParentDepartment(ctx context.Context, deptID string) (string, error) {
+	var parent *string
+	err := r.db.QueryRow(ctx, `SELECT parent_id::text FROM departments WHERE id::text = $1`, deptID).Scan(&parent)
+	if err != nil || parent == nil {
+		return "", err
+	}
+	return *parent, nil
 }

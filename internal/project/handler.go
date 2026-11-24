@@ -55,7 +55,8 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		scopeUserID = middleware.GetUserID(r)
 	}
 
-	projects, err := h.svc.List(r.Context(), middleware.GetDeptID(r), scopeUserID)
+	// Dept heads also see their sub-departments' projects.
+	projects, err := h.svc.List(r.Context(), middleware.GetDeptID(r), scopeUserID, middleware.HasRole(r, middleware.RoleDeptHead))
 	if err != nil {
 		response.ServerError(w, r, err)
 		return

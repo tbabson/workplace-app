@@ -23,12 +23,13 @@ func TestScopeDept(t *testing.T) {
 }
 
 func TestCanAccessUser(t *testing.T) {
-	depts := map[string]string{"alice": "sales", "bob": "press"}
-	SetUserDepartmentLookup(func(_ context.Context, id string) (string, error) {
+	// carol is in "hr", a sub-department of "admin".
+	depts := map[string][2]string{"alice": {"sales", ""}, "bob": {"press", ""}, "carol": {"hr", "admin"}, "dave": {"admin", ""}}
+	SetUserDepartmentLookup(func(_ context.Context, id string) (string, string, error) {
 		if d, ok := depts[id]; ok {
-			return d, nil
+			return d[0], d[1], nil
 		}
-		return "", errors.New("no such user")
+		return "", "", errors.New("no such user")
 	})
 
 	cases := []struct {
@@ -39,6 +40,9 @@ func TestCanAccessUser(t *testing.T) {
 		{"staff → colleague", RoleStaff, "sales", "alice", false},
 		{"dept head → own dept", RoleDeptHead, "sales", "alice", true},
 		{"dept head → other dept", RoleDeptHead, "sales", "bob", false},
+		{"parent dept head → sub-dept staff", RoleDeptHead, "admin", "carol", true},
+		{"sub-dept head → own staff", RoleDeptHead, "hr", "carol", true},
+		{"sub-dept head → parent dept staff", RoleDeptHead, "hr", "dave", false},
 		{"dept head without dept", RoleDeptHead, "", "alice", false},
 		{"dept head → unknown user", RoleDeptHead, "sales", "ghost", false},
 		{"super admin → anyone", RoleSuperAdmin, "", "bob", true},

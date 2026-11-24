@@ -131,20 +131,21 @@ func (s *Service) notifySignEvent(userID string, signIn bool) {
 		s.notifSvc.NotifyMany(ctx, inputs)
 	}
 
-	// Notify the dept_head of the user's department (only for staff/procurement)
+	// Notify the dept heads overseeing the user's department (only for
+	// staff/procurement): their own head and, for a sub-department, the parent's head.
 	if (u.Role == "staff" || u.Role == "procurement") && u.DepartmentID != nil {
-		deptMembers, err := s.userRepo.ListByDepartment(ctx, *u.DepartmentID)
+		heads, err := s.userRepo.DeptHeadsOverseeing(ctx, *u.DepartmentID)
 		if err == nil {
-			for _, m := range deptMembers {
-				if m.Role == "dept_head" && m.ID != userID {
-					s.notifSvc.Notify(ctx, notification.NotifyInput{
-						UserID: m.ID,
-						Type:   notifType,
-						Title:  title,
-						Body:   body,
-					})
-					break
+			for _, m := range heads {
+				if m.ID == userID {
+					continue
 				}
+				s.notifSvc.Notify(ctx, notification.NotifyInput{
+					UserID: m.ID,
+					Type:   notifType,
+					Title:  title,
+					Body:   body,
+				})
 			}
 		}
 	}

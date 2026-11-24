@@ -160,3 +160,53 @@ func (r *Repository) UpdatePassword(ctx context.Context, id, hash string) error 
 		`UPDATE users SET password_hash=$1, updated_at=$2 WHERE id=$3`, hash, time.Now(), id)
 	return err
 }
+
+// ListInDepartmentTree returns the users in deptID and in its sub-departments.
+func (r *Repository) ListInDepartmentTree(ctx context.Context, deptID string) ([]*User, error) {
+	q := `SELECT id, name, email, role, position, department_id, department_name, is_active, created_at, updated_at
+	      FROM users
+	      WHERE department_id IN (SELECT id FROM departments WHERE id::text = $1 OR parent_id::text = $1)
+	      ORDER BY name`
+	rows, err := r.db.Query(ctx, q, deptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []*User
+	for rows.Next() {
+		u := &User{}
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Role,
+			&u.Position, &u.DepartmentID, &u.DepartmentName, &u.IsActive, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// DeptHeadsOverseeing returns the active dept heads responsible for deptID: the
+// head of deptID itself and the head of its parent department, if any.
+func (r *Repository) DeptHeadsOverseeing(ctx context.Context, deptID string) ([]*User, error) {
+	q := `SELECT id, name, email, role, position, department_id, department_name, is_active, created_at, updated_at
+	      FROM users
+	      WHERE role = 'dept_head' AND is_active
+	        AND department_id IN (
+	          SELECT id FROM departments WHERE id::text = $1
+	          UNION
+	          SELECT parent_id FROM departments WHERE id::text = $1 AND parent_id IS NOT NULL)`
+	rows, err := r.db.Query(ctx, q, deptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []*User
+	for rows.Next() {
+		u := &User{}
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Role,
+			&u.Position, &u.DepartmentID, &u.DepartmentName, &u.IsActive, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}

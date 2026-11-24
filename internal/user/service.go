@@ -25,21 +25,32 @@ type Service struct {
 	repo  *Repository
 	cache *cache.Cache
 
-	// onDepartmentJoined runs when an active user is created in, moved into, or
-	// reactivated in a department. See OnDepartmentJoined.
-	onDepartmentJoined func(ctx context.Context, userID, deptID string)
+	// onDepartmentChanged runs when a user's effective department changes. See
+	// OnDepartmentChanged.
+	onDepartmentChanged func(ctx context.Context, userID, fromDept, toDept string)
 }
 
-// OnDepartmentJoined registers a callback for users joining a department (used
-// to add them to their department's projects). The project package can't be
-// imported here without a cycle, so main wires it up.
-func (s *Service) OnDepartmentJoined(fn func(ctx context.Context, userID, deptID string)) {
-	s.onDepartmentJoined = fn
+// OnDepartmentChanged registers a callback for a user's department changing,
+// used to keep their project memberships in step with their department. It runs
+// when a user is created in a department (from ""), moved between departments,
+// removed from one (to ""), or reactivated in one (from ""). The project package
+// can't be imported here without a cycle, so main wires it up.
+func (s *Service) OnDepartmentChanged(fn func(ctx context.Context, userID, fromDept, toDept string)) {
+	s.onDepartmentChanged = fn
 }
 
-func (s *Service) departmentJoined(ctx context.Context, u *User) {
-	if s.onDepartmentJoined != nil && u.IsActive && u.DepartmentID != nil && *u.DepartmentID != "" {
-		s.onDepartmentJoined(ctx, u.ID, *u.DepartmentID)
+// effectiveDept is the department a user counts as being in: none while inactive.
+func effectiveDept(u *User) string {
+	if u == nil || !u.IsActive || u.DepartmentID == nil {
+		return ""
+	}
+	return *u.DepartmentID
+}
+
+func (s *Service) departmentChanged(ctx context.Context, before, after *User) {
+	from, to := effectiveDept(before), effectiveDept(after)
+	if s.onDepartmentChanged != nil && from != to {
+		s.onDepartmentChanged(ctx, after.ID, from, to)
 	}
 }
 
@@ -97,7 +108,7 @@ func (s *Service) Create(ctx context.Context, dto CreateUserDTO) (*User, error) 
 		}
 		return nil, err
 	}
-	s.departmentJoined(ctx, u)
+	s.departmentChanged(ctx, nil, u)
 	return u, nil
 }
 
@@ -158,7 +169,7 @@ func (s *Service) Update(ctx context.Context, id string, dto UpdateUserDTO) (*Us
 		}
 		dto.Email = &e
 	}
-	// Remember the previous department and status to detect someone joining a department.
+	// Remember the previous department and status to detect department changes.
 	before, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -171,17 +182,8 @@ func (s *Service) Update(ctx context.Context, id string, dto UpdateUserDTO) (*Us
 		return nil, err
 	}
 	cache.Delete(ctx, s.cache, userKey(id))
-	if deptOf(before) != deptOf(u) || (!before.IsActive && u.IsActive) {
-		s.departmentJoined(ctx, u)
-	}
+	s.departmentChanged(ctx, before, u)
 	return u, nil
-}
-
-func deptOf(u *User) string {
-	if u.DepartmentID == nil {
-		return ""
-	}
-	return *u.DepartmentID
 }
 
 // UpdateMe applies the profile fields any user may change on their own account.
