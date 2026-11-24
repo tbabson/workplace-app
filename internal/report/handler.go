@@ -12,7 +12,8 @@ type Handler struct{ svc *Service }
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, prefix string) {
-	manager := middleware.With(middleware.RequireRole(middleware.RoleSuperAdmin, middleware.RoleDeptHead))
+	// Reports: managers, plus procurement (which handles overtime and payments).
+	manager := middleware.With(middleware.RequireRole(middleware.RoleSuperAdmin, middleware.RoleDeptHead, middleware.RoleProcurement))
 
 	mux.HandleFunc("GET "+prefix+"/dashboard", h.dashboard)
 	mux.Handle("GET "+prefix+"/attendance", manager(h.attendance))

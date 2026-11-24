@@ -246,8 +246,20 @@ Run migrations in order. Each file is idempotent where possible (`IF NOT EXISTS`
 | `008_memo_acknowledgements.sql`   | Per-user memo acknowledgement junction table                              |
 | `009_attendance_auto_closed.sql`  | Adds `auto_closed` flag to attendance records                             |
 | `010_attendance_device_id.sql`    | Adds `device_id` column for buddy-punch prevention                        |
+| `011_database_timezone.sql`       | Sets the database default timezone (for psql and other direct tools)      |
 
 With Docker Compose, every migration runs automatically the first time Postgres starts with an empty data volume.
+
+For any other database (e.g. Neon), apply pending migrations to `DATABASE_URL` with:
+
+```bash
+make migrate          # go run ./cmd/migrate — runs each pending file once, tracked in schema_migrations
+make migrate-status   # list applied / pending files
+```
+
+For a database that was migrated by hand before this tool existed, record what's already there first: `go run ./cmd/migrate -baseline 010`.
+
+The app never relies on the database session timezone, which Neon's pooled endpoint forces to GMT. It computes "today" in `APP_TIMEZONE` itself.
 
 ### First admin account
 

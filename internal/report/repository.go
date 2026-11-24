@@ -2,14 +2,43 @@ package report
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	"workplace/pkg/clock"
+
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Repository struct{ db *pgxpool.Pool }
+type Repository struct{ db todayDB }
 
-func NewRepository(db *pgxpool.Pool) *Repository { return &Repository{db: db} }
+func NewRepository(db *pgxpool.Pool) *Repository { return &Repository{db: todayDB{db}} }
+
+// todayDB makes report queries use the application timezone (see package clock)
+// instead of the database session timezone, which can't be trusted: Neon's
+// pooler forces it to GMT. Before each query it replaces
+//   - CURRENT_DATE with today's date in the app timezone, and
+//   - APP_TZ with the quoted zone name, for `ts AT TIME ZONE APP_TZ`.
+//
+// Inlining is safe: both values come from the app's own config, never from users.
+type todayDB struct{ pool *pgxpool.Pool }
+
+func withToday(sql string) string {
+	zone := strings.ReplaceAll(clock.Zone(), "'", "''")
+	return strings.NewReplacer(
+		"CURRENT_DATE", "DATE '"+clock.Today()+"'",
+		"APP_TZ", "'"+zone+"'",
+	).Replace(sql)
+}
+
+func (d todayDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return d.pool.Query(ctx, withToday(sql), args...)
+}
+
+func (d todayDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return d.pool.QueryRow(ctx, withToday(sql), args...)
+}
 
 // ── Chart/list value types ───────────────────────────────────────────────────
 
@@ -164,7 +193,7 @@ func (r *Repository) adminDashboard(ctx context.Context, d *DashboardData) (*Das
 	// Today's attendees
 	rows, err = r.db.Query(ctx, `
 		SELECT u.name, COALESCE(u.position,''), COALESCE(u.department_name,''),
-		       to_char(a.sign_in_at, 'HH12:MI AM'), a.sign_out_at IS NOT NULL
+		       to_char(a.sign_in_at AT TIME ZONE APP_TZ, 'HH12:MI AM'), a.sign_out_at IS NOT NULL
 		FROM attendance a JOIN users u ON u.id = a.user_id
 		WHERE a.date = CURRENT_DATE AND a.sign_in_at IS NOT NULL
 		ORDER BY a.sign_in_at`)
@@ -280,7 +309,7 @@ func (r *Repository) deptHeadDashboard(ctx context.Context, d *DashboardData, de
 	// Dept today's attendees
 	rows, err = r.db.Query(ctx, `
 		SELECT u.name, COALESCE(u.position,''), COALESCE(u.department_name,''),
-		       to_char(a.sign_in_at, 'HH12:MI AM'), a.sign_out_at IS NOT NULL
+		       to_char(a.sign_in_at AT TIME ZONE APP_TZ, 'HH12:MI AM'), a.sign_out_at IS NOT NULL
 		FROM attendance a JOIN users u ON u.id = a.user_id
 		WHERE a.date = CURRENT_DATE AND a.sign_in_at IS NOT NULL AND u.department_id=$1
 		ORDER BY a.sign_in_at`, deptID)
@@ -425,7 +454,7 @@ func (r *Repository) AttendanceReport(ctx context.Context, from, to string) ([]*
 
 func (r *Repository) OvertimeReport(ctx context.Context, from, to string, _ float64) ([]*OvertimeRow, error) {
 	q := `SELECT o.user_id, COALESCE(u.name, '') AS user_name,
-	             o.start_time::date::text AS date,
+	             (o.start_time AT TIME ZONE APP_TZ)::date::text AS date,
 	             COALESCE(
 	               o.hours,
 	               CASE WHEN o.end_time IS NOT NULL
@@ -435,7 +464,7 @@ func (r *Repository) OvertimeReport(ctx context.Context, from, to string, _ floa
 	             ) AS overtime_hours
 	      FROM overtime o
 	      LEFT JOIN users u ON u.id = o.user_id
-	      WHERE o.start_time::date BETWEEN $1 AND $2
+	      WHERE (o.start_time AT TIME ZONE APP_TZ)::date BETWEEN $1 AND $2
 	      ORDER BY o.start_time DESC`
 	rows, err := r.db.Query(ctx, q, from, to)
 	if err != nil {

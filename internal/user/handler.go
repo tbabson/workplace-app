@@ -2,7 +2,9 @@ package user
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 
 	"workplace/pkg/middleware"
 	"workplace/pkg/response"
@@ -22,6 +24,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, prefix string) {
 	mux.HandleFunc("GET "+prefix, h.list)
 	mux.Handle("POST "+prefix, admin(h.create))
 	mux.HandleFunc("GET "+prefix+"/me", h.me)
+	mux.HandleFunc("PUT "+prefix+"/me", h.updateMe)
+	mux.HandleFunc("PUT "+prefix+"/me/password", h.changePassword)
 	mux.HandleFunc("GET "+prefix+"/{id}", h.getByID)
 	mux.HandleFunc("PUT "+prefix+"/{id}", h.update)
 	mux.Handle("DELETE "+prefix+"/{id}", admin(h.delete))
@@ -103,14 +107,50 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 
 	u, err := h.svc.Update(r.Context(), id, dto)
 	if err != nil {
-		if response.NotFound(err) {
-			response.Error(w, http.StatusNotFound, "user not found")
-			return
-		}
-		response.Error(w, http.StatusBadRequest, err.Error())
+		writeErr(w, r, err)
 		return
 	}
 	response.JSON(w, http.StatusOK, u)
+}
+
+func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
+	var dto UpdateMeDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	u, err := h.svc.UpdateMe(r.Context(), middleware.GetUserID(r), dto)
+	if err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, u)
+}
+
+func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	var dto ChangePasswordDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.svc.ChangePassword(r.Context(), middleware.GetUserID(r), dto); err != nil {
+		writeErr(w, r, err)
+		return
+	}
+	response.Message(w, http.StatusOK, "Password changed successfully")
+}
+
+func writeErr(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case response.NotFound(err):
+		response.Error(w, http.StatusNotFound, "user not found")
+	case errors.Is(err, ErrWrongPassword):
+		response.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrValidation):
+		response.Error(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), ErrValidation.Error()+": "))
+	default:
+		response.ServerError(w, r, err)
+	}
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {

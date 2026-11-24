@@ -123,6 +123,9 @@ func (r *Repository) Update(ctx context.Context, id string, dto UpdateUserDTO) (
 	if dto.Name != nil {
 		u.Name = *dto.Name
 	}
+	if dto.Email != nil {
+		u.Email = *dto.Email
+	}
 	if dto.Role != nil {
 		u.Role = *dto.Role
 	}
@@ -140,14 +143,20 @@ func (r *Repository) Update(ctx context.Context, id string, dto UpdateUserDTO) (
 	}
 	u.UpdatedAt = time.Now()
 
-	q := `UPDATE users SET name=$1, role=$2, position=$3, department_id=$4, department_name=$5, is_active=$6, updated_at=$7
+	q := `UPDATE users SET name=$1, role=$2, position=$3, department_id=$4, department_name=$5, is_active=$6, updated_at=$7, email=$9
 	      WHERE id=$8 RETURNING updated_at`
 	return u, r.db.QueryRow(ctx, q,
-		u.Name, u.Role, u.Position, u.DepartmentID, u.DepartmentName, u.IsActive, u.UpdatedAt, id,
+		u.Name, u.Role, u.Position, u.DepartmentID, u.DepartmentName, u.IsActive, u.UpdatedAt, id, u.Email,
 	).Scan(&u.UpdatedAt)
 }
 
 func (r *Repository) Delete(ctx context.Context, id string) error {
 	_, err := r.db.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	return err
+}
+
+func (r *Repository) UpdatePassword(ctx context.Context, id, hash string) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE users SET password_hash=$1, updated_at=$2 WHERE id=$3`, hash, time.Now(), id)
 	return err
 }

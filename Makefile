@@ -1,4 +1,4 @@
-.PHONY: up down build run test migrate3 migrate4 migrate5 migrate6 tidy lint
+.PHONY: up down build run test migrate migrate-status migrate3 migrate4 migrate5 migrate6 tidy lint
 
 up:
 	docker compose up -d
@@ -11,6 +11,12 @@ build:
 
 run:
 	go run ./cmd/server
+
+migrate:
+	go run ./cmd/migrate
+
+migrate-status:
+	go run ./cmd/migrate -status
 
 migrate3:
 	docker exec -i workplace_postgres psql -U postgres -d workplace < migrations/003_add_user_role.sql

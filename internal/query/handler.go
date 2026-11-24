@@ -17,10 +17,9 @@ func NewHandler(svc *Service) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, prefix string) {
-	manager := middleware.With(middleware.RequireRole(middleware.RoleSuperAdmin, middleware.RoleDeptHead))
-
+	// Anyone may submit a query to a manager; only its recipient may respond.
 	mux.HandleFunc("GET "+prefix, h.list)
-	mux.Handle("POST "+prefix, manager(h.create))
+	mux.HandleFunc("POST "+prefix, h.create)
 	mux.HandleFunc("GET "+prefix+"/{id}", h.getByID)
 	mux.HandleFunc("PUT "+prefix+"/{id}/respond", h.respond)
 	mux.HandleFunc("DELETE "+prefix+"/{id}", h.delete)

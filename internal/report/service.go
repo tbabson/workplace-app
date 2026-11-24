@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"workplace/pkg/cache"
+	"workplace/pkg/clock"
 )
 
 const ttlDashboard = 30 * time.Second
@@ -21,10 +22,10 @@ func NewService(repo *Repository, c *cache.Cache) *Service { return &Service{rep
 
 func defaultDateRange(from, to string) (string, string) {
 	if from == "" {
-		from = time.Now().AddDate(0, -1, 0).Format("2006-01-02")
+		from = clock.Now().AddDate(0, -1, 0).Format("2006-01-02")
 	}
 	if to == "" {
-		to = time.Now().Format("2006-01-02")
+		to = clock.Today()
 	}
 	return from, to
 }

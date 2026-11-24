@@ -124,16 +124,57 @@ func (s *Service) ListByDepartment(ctx context.Context, deptID string) ([]*User,
 	return s.repo.ListByDepartment(ctx, deptID)
 }
 
+var ErrValidation = errors.New("validation failed")
+
 func (s *Service) Update(ctx context.Context, id string, dto UpdateUserDTO) (*User, error) {
 	if dto.Role != nil && !dto.Role.Valid() {
-		return nil, errors.New("invalid role")
+		return nil, fmt.Errorf("%w: invalid role", ErrValidation)
+	}
+	if dto.Name != nil && strings.TrimSpace(*dto.Name) == "" {
+		return nil, fmt.Errorf("%w: name cannot be empty", ErrValidation)
+	}
+	if dto.Email != nil {
+		e := strings.ToLower(strings.TrimSpace(*dto.Email))
+		if _, err := mail.ParseAddress(e); err != nil || e == "" {
+			return nil, fmt.Errorf("%w: invalid email address", ErrValidation)
+		}
+		dto.Email = &e
 	}
 	u, err := s.repo.Update(ctx, id, dto)
 	if err != nil {
+		if strings.Contains(err.Error(), "23505") {
+			return nil, fmt.Errorf("%w: a user with this email already exists", ErrValidation)
+		}
 		return nil, err
 	}
 	cache.Delete(ctx, s.cache, userKey(id))
 	return u, nil
+}
+
+// UpdateMe applies the profile fields any user may change on their own account.
+func (s *Service) UpdateMe(ctx context.Context, id string, dto UpdateMeDTO) (*User, error) {
+	return s.Update(ctx, id, UpdateUserDTO{Name: dto.Name, Email: dto.Email, Position: dto.Position})
+}
+
+var ErrWrongPassword = errors.New("current password is incorrect")
+
+// ChangePassword verifies the current password before setting a new one.
+func (s *Service) ChangePassword(ctx context.Context, id string, dto ChangePasswordDTO) error {
+	if len(dto.NewPassword) < minPasswordLen {
+		return fmt.Errorf("%w: password must be at least %d characters", ErrValidation, minPasswordLen)
+	}
+	u, err := s.repo.FindByID(ctx, id) // from the DB: the cached copy has no hash
+	if err != nil {
+		return err
+	}
+	if !utils.CheckPassword(dto.CurrentPassword, u.PasswordHash) {
+		return ErrWrongPassword
+	}
+	hash, err := utils.HashPassword(dto.NewPassword)
+	if err != nil {
+		return err
+	}
+	return s.repo.UpdatePassword(ctx, id, hash)
 }
 
 func (s *Service) Delete(ctx context.Context, id string) error {

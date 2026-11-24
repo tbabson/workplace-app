@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"workplace/pkg/clock"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -81,9 +83,9 @@ func (r *Repository) Update(ctx context.Context, id string, dto UpdateTaskDTO) (
 func (r *Repository) ListDueTomorrow(ctx context.Context) ([]*Task, error) {
 	rows, err := r.db.Query(ctx,
 		`SELECT `+cols+` FROM project_tasks
-		 WHERE due_date = CURRENT_DATE + 1
+		 WHERE due_date = $1::date
 		 AND assigned_to IS NOT NULL
-		 AND status != 'done'`)
+		 AND status != 'done'`, clock.DaysFromToday(1))
 	if err != nil {
 		return nil, err
 	}

@@ -30,6 +30,7 @@ import (
 	"workplace/internal/task"
 	"workplace/internal/user"
 	"workplace/pkg/cache"
+	"workplace/pkg/clock"
 	"workplace/pkg/config"
 	"workplace/pkg/database"
 	"workplace/pkg/middleware"
@@ -38,7 +39,11 @@ import (
 func main() {
 	cfg := config.Load()
 
-	db, err := database.NewPostgres(cfg.DatabaseURL, cfg.Location.String())
+	// "Today" comes from the app clock, not the database session, whose timezone
+	// connection poolers such as Neon's override.
+	clock.SetLocation(cfg.Location)
+
+	db, err := database.NewPostgres(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("postgres: %v", err)
 	}

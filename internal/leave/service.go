@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"workplace/internal/notification"
+	"workplace/pkg/clock"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -164,7 +165,7 @@ func (s *Service) Cancel(ctx context.Context, id, userID string) error {
 
 func (s *Service) GetBalance(ctx context.Context, userID string, year int) ([]*Balance, error) {
 	if year == 0 {
-		year = time.Now().Year()
+		year = clock.Now().Year()
 	}
 	return s.repo.GetBalance(ctx, userID, year)
 }
@@ -177,7 +178,7 @@ func (s *Service) SetBalance(ctx context.Context, dto SetBalanceDTO, userID stri
 		return errors.New("total must not be negative")
 	}
 	if dto.Year == 0 {
-		dto.Year = time.Now().Year()
+		dto.Year = clock.Now().Year()
 	}
 	return s.repo.SetBalance(ctx, &Balance{UserID: userID, Type: dto.Type, Year: dto.Year, Total: dto.Total})
 }

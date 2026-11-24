@@ -107,15 +107,14 @@ func TestRolePermissions(t *testing.T) {
 		{"POST", "/api/v1/assets/" + someID + "/assign", []string{"staff", "dept_head"}, `{}`},
 		{"DELETE", "/api/v1/assets/" + someID, []string{"staff", "dept_head"}, ""},
 
-		// Memos & queries: managers send.
+		// Memos: managers send.
 		{"POST", "/api/v1/memos", []string{"staff", "procurement"}, `{}`},
-		{"POST", "/api/v1/queries", []string{"staff", "procurement"}, `{}`},
 
 		// Reports & attendance history: managers.
-		{"GET", "/api/v1/reports/attendance", []string{"staff", "procurement"}, ""},
-		{"GET", "/api/v1/reports/attendance/export", []string{"staff", "procurement"}, ""},
-		{"GET", "/api/v1/reports/overtime", []string{"staff", "procurement"}, ""},
-		{"GET", "/api/v1/reports/overtime/export", []string{"staff", "procurement"}, ""},
+		{"GET", "/api/v1/reports/attendance", []string{"staff"}, ""},
+		{"GET", "/api/v1/reports/attendance/export", []string{"staff"}, ""},
+		{"GET", "/api/v1/reports/overtime", []string{"staff"}, ""},
+		{"GET", "/api/v1/reports/overtime/export", []string{"staff"}, ""},
 		{"GET", "/api/v1/attendance", []string{"staff", "procurement"}, ""},
 		{"GET", "/api/v1/attendance/user/" + someID, []string{"staff", "procurement"}, ""},
 		{"PUT", "/api/v1/attendance/" + someID + "/sign-out", []string{"staff", "procurement"}, ""},

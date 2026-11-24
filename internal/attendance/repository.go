@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"workplace/pkg/clock"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -28,24 +30,24 @@ func (r *Repository) SignIn(ctx context.Context, userID, deviceID string, lat, l
 	now := time.Now()
 	a := &Attendance{}
 	q := `INSERT INTO attendance (user_id, sign_in_at, sign_in_lat, sign_in_lng, date, device_id)
-	      VALUES ($1, $2, $3, $4, CURRENT_DATE, $5)
+	      VALUES ($1, $2, $3, $4, $6::date, $5)
 	      RETURNING ` + cols
-	return a, scan(a, r.db.QueryRow(ctx, q, userID, now, lat, lng, deviceID))
+	return a, scan(a, r.db.QueryRow(ctx, q, userID, now, lat, lng, deviceID, clock.Today()))
 }
 
 func (r *Repository) SignOut(ctx context.Context, userID string) (*Attendance, error) {
 	now := time.Now()
 	a := &Attendance{}
 	q := `UPDATE attendance SET sign_out_at = $1
-	      WHERE user_id = $2 AND date = CURRENT_DATE AND sign_in_at IS NOT NULL AND sign_out_at IS NULL
+	      WHERE user_id = $2 AND date = $3::date AND sign_in_at IS NOT NULL AND sign_out_at IS NULL
 	      RETURNING ` + cols
-	return a, scan(a, r.db.QueryRow(ctx, q, now, userID))
+	return a, scan(a, r.db.QueryRow(ctx, q, now, userID, clock.Today()))
 }
 
 func (r *Repository) TodayRecord(ctx context.Context, userID string) (*Attendance, error) {
 	a := &Attendance{}
 	return a, scan(a, r.db.QueryRow(ctx,
-		`SELECT `+cols+` FROM attendance WHERE user_id = $1 AND date = CURRENT_DATE`, userID,
+		`SELECT `+cols+` FROM attendance WHERE user_id = $1 AND date = $2::date`, userID, clock.Today(),
 	))
 }
 
@@ -59,12 +61,12 @@ func (r *Repository) IsDeviceSignedInToday(ctx context.Context, deviceID, userID
 	err := r.db.QueryRow(ctx,
 		`SELECT EXISTS(
 		   SELECT 1 FROM attendance
-		   WHERE date = CURRENT_DATE
+		   WHERE date = $3::date
 		     AND sign_in_at IS NOT NULL
 		     AND device_id = $1
 		     AND user_id != $2
 		 )`,
-		deviceID, userID,
+		deviceID, userID, clock.Today(),
 	).Scan(&exists)
 	return exists, err
 }
@@ -72,7 +74,8 @@ func (r *Repository) IsDeviceSignedInToday(ctx context.Context, deviceID, userID
 func (r *Repository) ListSignedInToday(ctx context.Context) ([]string, error) {
 	rows, err := r.db.Query(ctx,
 		`SELECT user_id FROM attendance
-		 WHERE date = CURRENT_DATE AND sign_in_at IS NOT NULL AND sign_out_at IS NULL`,
+		 WHERE date = $1::date AND sign_in_at IS NOT NULL AND sign_out_at IS NULL`,
+		clock.Today(),
 	)
 	if err != nil {
 		return nil, err
@@ -136,9 +139,9 @@ func (r *Repository) AutoCloseOpenRecords(ctx context.Context, signOutAt time.Ti
 	rows, err := r.db.Query(ctx,
 		`UPDATE attendance
 		 SET sign_out_at = $1, auto_closed = true
-		 WHERE date = CURRENT_DATE AND sign_in_at IS NOT NULL AND sign_out_at IS NULL
+		 WHERE date = $2::date AND sign_in_at IS NOT NULL AND sign_out_at IS NULL
 		 RETURNING user_id`,
-		signOutAt,
+		signOutAt, clock.Today(),
 	)
 	if err != nil {
 		return nil, err

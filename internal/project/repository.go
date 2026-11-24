@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"workplace/pkg/clock"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -149,9 +151,9 @@ func (r *Repository) Unassign(ctx context.Context, projectID, userID string) err
 func (r *Repository) ListDueTomorrow(ctx context.Context) ([]*Project, error) {
 	rows, err := r.db.Query(ctx,
 		`SELECT `+selectCols+` FROM projects
-		 WHERE end_date = CURRENT_DATE + 1
+		 WHERE end_date = $1::date
 		 AND status NOT IN ('completed', 'cancelled')
-		 ORDER BY created_at DESC`)
+		 ORDER BY created_at DESC`, clock.DaysFromToday(1))
 	if err != nil {
 		return nil, err
 	}
