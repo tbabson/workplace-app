@@ -66,13 +66,40 @@ func (h *Handler) checkAssignee(w http.ResponseWriter, r *http.Request, projectI
 	return true
 }
 
+// visible reports whether the caller may see a task:
+//   - super admins see every task;
+//   - dept heads see tasks assigned to them or to staff they oversee (their
+//     department and its sub-departments), plus tasks they created — not other
+//     departments' duties on a shared project;
+//   - everyone else (staff, procurement) sees only tasks assigned to them, plus
+//     any they created.
+func visible(r *http.Request, t *Task) bool {
+	me := middleware.GetUserID(r)
+	switch {
+	case middleware.HasRole(r, middleware.RoleSuperAdmin):
+		return true
+	case t.CreatedBy == me:
+		return true
+	case middleware.HasRole(r, middleware.RoleDeptHead):
+		return t.AssignedTo != nil && middleware.CanAccessUser(r, *t.AssignedTo)
+	default:
+		return t.AssignedTo != nil && *t.AssignedTo == me
+	}
+}
+
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	tasks, err := h.svc.ListByProject(r.Context(), r.PathValue("projectID"))
 	if err != nil {
 		response.ServerError(w, r, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, tasks, len(tasks))
+	shown := make([]*Task, 0, len(tasks))
+	for _, t := range tasks {
+		if visible(r, t) {
+			shown = append(shown, t)
+		}
+	}
+	response.JSON(w, http.StatusOK, shown, len(shown))
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +131,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) getByID(w http.ResponseWriter, r *http.Request) {
 	t, err := h.svc.GetByID(r.Context(), r.PathValue("id"))
-	if err != nil {
+	if err != nil || !visible(r, t) {
 		response.Error(w, http.StatusNotFound, "task not found")
 		return
 	}
@@ -118,7 +145,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := h.svc.GetByID(r.Context(), r.PathValue("id"))
-	if err != nil {
+	if err != nil || !visible(r, t) {
 		response.Error(w, http.StatusNotFound, "task not found")
 		return
 	}
@@ -155,7 +182,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	t, err := h.svc.GetByID(r.Context(), r.PathValue("id"))
-	if err != nil {
+	if err != nil || !visible(r, t) {
 		response.Error(w, http.StatusNotFound, "task not found")
 		return
 	}

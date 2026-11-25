@@ -68,11 +68,20 @@ func (r *Repository) Update(ctx context.Context, id string, dto UpdateTaskDTO) (
 	if dto.Status != nil {
 		t.Status = *dto.Status
 	}
+	// "" clears the assignee / due date.
 	if dto.AssignedTo != nil {
-		t.AssignedTo = dto.AssignedTo
+		if *dto.AssignedTo == "" {
+			t.AssignedTo = nil
+		} else {
+			t.AssignedTo = dto.AssignedTo
+		}
 	}
 	if dto.DueDate != nil {
-		t.DueDate = dto.DueDate
+		if *dto.DueDate == "" {
+			t.DueDate = nil
+		} else {
+			t.DueDate = dto.DueDate
+		}
 	}
 	t.UpdatedAt = time.Now()
 	q := `UPDATE project_tasks SET title=$1, description=$2, status=$3, assigned_to=$4, due_date=$5::date, updated_at=$6 WHERE id=$7`

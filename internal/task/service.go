@@ -89,7 +89,7 @@ func (s *Service) Update(ctx context.Context, id string, dto UpdateTaskDTO) (*Ta
 		if old.AssignedTo != nil {
 			oldAssignee = *old.AssignedTo
 		}
-		if newAssignee != oldAssignee {
+		if newAssignee != "" && newAssignee != oldAssignee {
 			refID := id
 			go func() {
 				_ = s.chatSvc.SyncProjectMember(context.Background(), updated.ProjectID, newAssignee, true)
