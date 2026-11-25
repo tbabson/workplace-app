@@ -25,6 +25,7 @@ func TestDepartmentChangedHook(t *testing.T) {
 		{"deactivated", user(str("a"), true), user(str("a"), false), true, "a", ""},
 		{"reactivated", user(str("a"), false), user(str("a"), true), true, "", "a"},
 		{"moved while inactive", user(str("a"), false), user(str("b"), false), false, "", ""},
+		{"promoted to dept head", &User{ID: "u1", DepartmentID: str("a"), IsActive: true, Role: RoleStaff}, &User{ID: "u1", DepartmentID: str("a"), IsActive: true, Role: RoleDeptHead}, true, "", "a"},
 	}
 	for _, c := range cases {
 		var called bool

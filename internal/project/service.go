@@ -50,34 +50,60 @@ func (s *Service) Create(ctx context.Context, dto CreateProjectDTO, createdBy st
 		return nil, err
 	}
 
-	go s.chatSvc.CreateProjectRoom(context.Background(), p.ID, p.Title, createdBy)
+	// Create the chat room before anyone is assigned, so new members are added to it.
+	if _, err := s.chatSvc.CreateProjectRoom(ctx, p.ID, p.Title, createdBy); err != nil {
+		log.Printf("create chat room for project %s: %v", p.ID, err)
+	}
 
-	// Notify department members about the new project
 	if p.DepartmentID != nil {
-		go func(deptID, projectID, title string) {
-			members, err := s.userRepo.ListByDepartment(context.Background(), deptID)
-			if err != nil {
-				return
-			}
-			refID := projectID
-			var inputs []notification.NotifyInput
-			for _, u := range members {
-				if u.ID == createdBy {
-					continue
-				}
-				inputs = append(inputs, notification.NotifyInput{
-					UserID: u.ID,
-					Type:   notification.TypeProjectCreated,
-					Title:  "New Project: " + title,
-					Body:   fmt.Sprintf("A new project \"%s\" has been created in your department.", title),
-					RefID:  &refID,
-				})
-			}
-			s.notifSvc.NotifyMany(context.Background(), inputs)
-		}(*p.DepartmentID, p.ID, p.Title)
+		s.assignDepartmentHeads(ctx, p, createdBy)
 	}
 
 	return p, nil
+}
+
+// assignDepartmentHeads assigns the project's department head(s) to it. Assign
+// notifies them and brings in their staff, who are notified too. With no head,
+// the department's members are just told about the new project.
+func (s *Service) assignDepartmentHeads(ctx context.Context, p *Project, actorID string) {
+	deptID := *p.DepartmentID
+	heads, err := s.userRepo.ListDeptHeads(ctx, deptID)
+	if err != nil {
+		log.Printf("project %s: list dept heads: %v", p.ID, err)
+		return
+	}
+	for _, h := range heads {
+		if _, err := s.Assign(ctx, p.ID, h.ID); err != nil {
+			log.Printf("project %s: assign dept head %s: %v", p.ID, h.ID, err)
+		}
+	}
+	if len(heads) > 0 {
+		return
+	}
+
+	go func(projectID, title string) {
+		ctx := context.Background() // the request context is cancelled once the handler returns
+		members, err := s.userRepo.ListByDepartment(ctx, deptID)
+		if err != nil {
+			log.Printf("project %s: list department members: %v", projectID, err)
+			return
+		}
+		refID := projectID
+		var inputs []notification.NotifyInput
+		for _, u := range members {
+			if u.ID == actorID || !u.IsActive {
+				continue
+			}
+			inputs = append(inputs, notification.NotifyInput{
+				UserID: u.ID,
+				Type:   notification.TypeProjectCreated,
+				Title:  "New Project: " + title,
+				Body:   fmt.Sprintf("A new project \"%s\" has been created in your department.", title),
+				RefID:  &refID,
+			})
+		}
+		s.notifSvc.NotifyMany(ctx, inputs)
+	}(p.ID, p.Title)
 }
 
 func (s *Service) GetByID(ctx context.Context, id string) (*Project, error) {
@@ -96,6 +122,11 @@ func (s *Service) Update(ctx context.Context, id, changedBy string, dto UpdatePr
 	p, err := s.repo.Update(ctx, id, dto)
 	if err != nil {
 		return nil, err
+	}
+	// Moved to another department: bring in that department's head (and staff).
+	if p.DepartmentID != nil && *p.DepartmentID != "" &&
+		(old.DepartmentID == nil || *old.DepartmentID != *p.DepartmentID) {
+		s.assignDepartmentHeads(ctx, p, changedBy)
 	}
 	if dto.Status != nil && *dto.Status != old.Status {
 		from := string(old.Status)
@@ -401,6 +432,26 @@ func (s *Service) HandleDepartmentChange(ctx context.Context, userID, fromDept, 
 	}
 	if toDept != "" {
 		s.AddToDepartmentProjects(ctx, userID, toDept)
+		s.assignAsDepartmentHead(ctx, userID, toDept)
+	}
+}
+
+// assignAsDepartmentHead puts a dept head who has just joined deptID on that
+// department's active projects; Assign notifies them and brings in their staff.
+func (s *Service) assignAsDepartmentHead(ctx context.Context, userID, deptID string) {
+	u, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil || u.Role != user.RoleDeptHead {
+		return
+	}
+	projects, err := s.repo.ActiveProjectsInDepartment(ctx, deptID)
+	if err != nil {
+		log.Printf("assign dept head %s to department projects: %v", userID, err)
+		return
+	}
+	for _, p := range projects {
+		if _, err := s.Assign(ctx, p.ID, userID); err != nil {
+			log.Printf("assign dept head %s to project %s: %v", userID, p.ID, err)
+		}
 	}
 }
 

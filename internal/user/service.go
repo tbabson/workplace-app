@@ -48,9 +48,18 @@ func effectiveDept(u *User) string {
 }
 
 func (s *Service) departmentChanged(ctx context.Context, before, after *User) {
+	if s.onDepartmentChanged == nil {
+		return
+	}
 	from, to := effectiveDept(before), effectiveDept(after)
-	if s.onDepartmentChanged != nil && from != to {
+	if from != to {
 		s.onDepartmentChanged(ctx, after.ID, from, to)
+		return
+	}
+	// Promoted to dept head without changing department: treat it as joining, so
+	// they are put on their department's projects.
+	if to != "" && before != nil && before.Role != RoleDeptHead && after.Role == RoleDeptHead {
+		s.onDepartmentChanged(ctx, after.ID, "", to)
 	}
 }
 
@@ -67,6 +76,9 @@ func (r Role) Valid() bool {
 }
 
 func (s *Service) Create(ctx context.Context, dto CreateUserDTO) (*User, error) {
+	if dto.DepartmentID != nil && *dto.DepartmentID == "" {
+		dto.DepartmentID, dto.DepartmentName = nil, nil
+	}
 	dto.Email = strings.ToLower(strings.TrimSpace(dto.Email))
 	if dto.Name == "" || dto.Email == "" || dto.Password == "" {
 		return nil, errors.New("name, email and password are required")

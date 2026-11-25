@@ -4,6 +4,11 @@ services:
     container_name: workplace_app
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Inside Docker, use the stack's own Redis: reaching a remote Redis (e.g. Upstash)
+      # from the container is slow and times out, which fails auth checks with 503 and
+      # drops notification WebSockets. Set DOCKER_REDIS_URL to override.
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
     ports:
       - "127.0.0.1:${APP_PORT:-5002}:5002" # direct access for local debugging only; use nginx
     depends_on:

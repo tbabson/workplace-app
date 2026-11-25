@@ -90,7 +90,7 @@ func (s *Service) CreateDM(ctx context.Context, dto CreateDMDTO, currentUserID s
 
 func (s *Service) CreateProjectRoom(ctx context.Context, projectID, projectTitle, createdBy string) (*Room, error) {
 	room := &Room{
-		Name:      projectTitle + " — Project Chat",
+		Name:      projectTitle + projectRoomSuffix,
 		Type:      RoomProject,
 		ProjectID: &projectID,
 		CreatedBy: createdBy,

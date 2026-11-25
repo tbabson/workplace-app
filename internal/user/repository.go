@@ -132,10 +132,16 @@ func (r *Repository) Update(ctx context.Context, id string, dto UpdateUserDTO) (
 	if dto.Position != nil {
 		u.Position = dto.Position
 	}
+	// "" clears the department (and its denormalised name).
 	if dto.DepartmentID != nil {
-		u.DepartmentID = dto.DepartmentID
+		if *dto.DepartmentID == "" {
+			u.DepartmentID = nil
+			u.DepartmentName = nil
+		} else {
+			u.DepartmentID = dto.DepartmentID
+		}
 	}
-	if dto.DepartmentName != nil {
+	if dto.DepartmentName != nil && u.DepartmentID != nil {
 		u.DepartmentName = dto.DepartmentName
 	}
 	if dto.IsActive != nil {
@@ -194,6 +200,27 @@ func (r *Repository) DeptHeadsOverseeing(ctx context.Context, deptID string) ([]
 	          SELECT id FROM departments WHERE id::text = $1
 	          UNION
 	          SELECT parent_id FROM departments WHERE id::text = $1 AND parent_id IS NOT NULL)`
+	rows, err := r.db.Query(ctx, q, deptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []*User
+	for rows.Next() {
+		u := &User{}
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Role,
+			&u.Position, &u.DepartmentID, &u.DepartmentName, &u.IsActive, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// ListDeptHeads returns the active dept heads of deptID itself.
+func (r *Repository) ListDeptHeads(ctx context.Context, deptID string) ([]*User, error) {
+	q := `SELECT id, name, email, role, position, department_id, department_name, is_active, created_at, updated_at
+	      FROM users WHERE role = 'dept_head' AND is_active AND department_id::text = $1 ORDER BY name`
 	rows, err := r.db.Query(ctx, q, deptID)
 	if err != nil {
 		return nil, err

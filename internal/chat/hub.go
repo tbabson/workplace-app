@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"sync"
 
 	"workplace/internal/notification"
@@ -162,12 +163,23 @@ func (h *Hub) notifyOfflineMembers(roomID, senderID, content string, connectedUs
 		return
 	}
 
-	// Resolve notification title: use sender's name for DMs, room name for group rooms.
-	title := "New message in " + room.Name
-	if room.Type == RoomDirect {
-		if sender, err := h.userRepo.FindByID(ctx, senderID); err == nil {
-			title = "New message from " + sender.Name
-		}
+	// Title says where the message is: who sent a DM, which project for a project
+	// room, or the room name. The body leads with the sender for group rooms.
+	senderName := "Someone"
+	if sender, err := h.userRepo.FindByID(ctx, senderID); err == nil {
+		senderName = sender.Name
+	}
+	body := truncate(content, 100)
+	var title string
+	switch room.Type {
+	case RoomDirect:
+		title = "New message from " + senderName
+	case RoomProject:
+		title = "New message in project: " + projectTitleOf(room)
+		body = senderName + ": " + body
+	default:
+		title = "New message in " + room.Name
+		body = senderName + ": " + body
 	}
 
 	refID := roomID
@@ -180,7 +192,7 @@ func (h *Hub) notifyOfflineMembers(roomID, senderID, content string, connectedUs
 			UserID: uid,
 			Type:   notification.TypeChatMessage,
 			Title:  title,
-			Body:   truncate(content, 100),
+			Body:   body,
 			RefID:  &refID,
 		})
 	}
@@ -215,4 +227,12 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// projectRoomSuffix is appended to a project's title to name its chat room.
+const projectRoomSuffix = " — Project Chat"
+
+// projectTitleOf returns the project's title for a project room.
+func projectTitleOf(room *Room) string {
+	return strings.TrimSuffix(room.Name, projectRoomSuffix)
 }

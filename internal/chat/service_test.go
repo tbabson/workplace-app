@@ -37,3 +37,10 @@ func TestTruncateKeepsRunesWhole(t *testing.T) {
 		t.Fatalf("truncate = %q", got)
 	}
 }
+
+func TestProjectTitleOf(t *testing.T) {
+	room := &Room{Type: RoomProject, Name: "Annual Report" + projectRoomSuffix}
+	if got := projectTitleOf(room); got != "Annual Report" {
+		t.Fatalf("projectTitleOf = %q", got)
+	}
+}

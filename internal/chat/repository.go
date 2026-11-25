@@ -87,7 +87,11 @@ func (r *Repository) ListRooms(ctx context.Context, userID string) ([]*Room, err
 	      FROM chat_rooms cr
 	      INNER JOIN chat_room_members crm ON crm.room_id = cr.id
 	      WHERE crm.user_id = $1
-	      ORDER BY cr.created_at DESC`
+	      -- Like WhatsApp: the room with the most recent message first; rooms
+	      -- without messages fall back to when they were created.
+	      ORDER BY COALESCE(
+	        (SELECT MAX(m.created_at) FROM messages m WHERE m.room_id = cr.id),
+	        cr.created_at) DESC`
 	rows, err := r.db.Query(ctx, q, userID)
 	if err != nil {
 		return nil, err
@@ -188,9 +192,15 @@ func (r *Repository) ListMessages(ctx context.Context, roomID string, limit int)
 	if limit == 0 {
 		limit = 50
 	}
+	// The most recent `limit` messages, returned oldest first so the newest is
+	// at the bottom of the chat (live messages are appended after these).
 	q := `SELECT id, room_id, sender_id, content, reply_to_id, is_deleted, created_at
-	      FROM messages WHERE room_id = $1
-	      ORDER BY created_at DESC LIMIT $2`
+	      FROM (
+	        SELECT id, room_id, sender_id, content, reply_to_id, is_deleted, created_at
+	        FROM messages WHERE room_id = $1
+	        ORDER BY created_at DESC, id DESC LIMIT $2
+	      ) recent
+	      ORDER BY created_at ASC, id ASC`
 	rows, err := r.db.Query(ctx, q, roomID, limit)
 	if err != nil {
 		return nil, err
