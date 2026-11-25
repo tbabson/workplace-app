@@ -20,7 +20,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 90s # Neon / Upstash can be slow to answer the first connection
 
   postgres:
     image: postgres:16.3-alpine3.20

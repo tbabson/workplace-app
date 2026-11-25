@@ -30,7 +30,8 @@ func NewPostgres(dsn string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("create postgres pool: %w", err)
 	}
 
-	if err := pool.Ping(context.Background()); err != nil {
+	if err := pingWithRetry("postgres", pool.Ping); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 

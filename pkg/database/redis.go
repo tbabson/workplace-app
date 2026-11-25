@@ -15,7 +15,8 @@ func NewRedis(url string) (*redis.Client, error) {
 
 	client := redis.NewClient(opts)
 
-	if err := client.Ping(context.Background()).Err(); err != nil {
+	if err := pingWithRetry("redis", func(ctx context.Context) error { return client.Ping(ctx).Err() }); err != nil {
+		client.Close()
 		return nil, fmt.Errorf("ping redis: %w", err)
 	}
 
